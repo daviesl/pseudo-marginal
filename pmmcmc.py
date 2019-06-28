@@ -34,7 +34,7 @@ class pmpfl(object):
         self.theta_size = theta_size
         self.X_all = np.zeros((T,n,X_size))
         self.X_ancestry = np.tile(np.arange(n),(T,1))
-        self.w_all = np.ones((T,n))/n
+        self.w_all = np.ones((T,n)) * (1./n)
         self.T = T
         self.n = n
         self.innov = innov
@@ -44,10 +44,19 @@ class pmpfl(object):
         logml_chain=np.zeros((num_runs))
         for j in range(num_runs):
             self.X_all[0,:] = X0
+            #print("X_all[0,:] = {}".format(self.X_all[0,:]))
             log_ml = np.zeros(self.T)
             for i in range(1,self.T):
-                log_ml[i] = self.particlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i,:],self.n,self.lh,self.innov)
+                log_ml[i] = self.bootstrapparticlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
+                #print("X_all[{},:] = {}".format(i,self.X_all[i,:]))
+                #print("X_all[{},:] = {}, y={}".format(i,self.X_all[i,:],self.y_all[i-1,:]))
+                #print("y={}".format(self.y_all[i-1,:]))
+                #print("log_ml[{}] = {}".format(i,log_ml[i]))
+            #print("X_all[{},:] = {}".format(self.T-1,self.X_all[self.T-1,:]))
+            #print("log_ml[{}] = {}".format(1,log_ml[1]))
+            #print("log_ml[{}] = {}".format(self.T-1,log_ml[self.T-1]))
             logml_chain[j] = log_ml.sum() # product of all marignal likelihoods
+            print("log_ml.sum() = {}".format(logml_chain[j]))
         return logml_chain
             
         
@@ -63,8 +72,10 @@ class pmpfl(object):
         prior_j_1=0
         for j in range(mcmc_chain_size):
             if j>0:
-                #propose theta?
-                theta[j,:]=theta[j-1,:]+np.random.normal(0,0.2,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                #propose theta using normal dist ar= 0.328
+                #theta[j,:]=theta[j-1,:]+np.random.normal(0,0.2,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                #propose theta using unif indep ar=0.499
+                theta[j,:]=np.random.uniform(0,1,self.theta_size) # assuming the innov function scales the parameters appropriately.
             # use a uniform prior
             prior_j = float(np.all(theta[j,:] <= 1) * np.all(theta[j,:] >= 0))
             #prior_j = norm.pdf(theta[j,:]).prod()
@@ -86,7 +97,7 @@ class pmpfl(object):
             #print(self.X_all[0,:])
             log_ml = np.zeros(self.T)
             for i in range(1,self.T):
-                log_ml[i] = self.particlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[j,:],self.X_ancestry[i,:],self.w_all[i,:],self.n,self.lh,self.innov)
+                log_ml[i] = self.bootstrapparticlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[j,:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
             # compute marginal likelihood of particle filter
             logml_chain[j] = log_ml.sum() # product of all marignal likelihoods
             ##print("1_Marginal likelihood at {} is {}".format(j, ml_j))
@@ -115,27 +126,82 @@ class pmpfl(object):
 #        # ancestry trace the final target distrubution particles and sum the weights for each
         
     @classmethod
-    def particlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi,n,lh,innov):
-        Xi[:] = innov(Xi_1,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
-        loglh = lh(Xi,yi)
+    def bootstrapparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
+        # Always resample, and at the start because innov() will disperse according to random effects in SDE
+        wi_1_norm = np.exp(np.log(wi_1) - logsumexp(np.log(wi_1)))
+        Xianc[:]=cls.resample(wi_1_norm)
+        #print("Resample count = {}".format(np.unique(Xianc[:]).shape[0]))
+        #print("Resample indices = {}".format(Xianc[:]))
+        Xi_1_rs=Xi_1[Xianc[:],:]
+        #wi[:]=wi[Xianc]
+        Xi[:] = innov(Xi_1_rs,theta)
+        loglh = lh(Xi,yi,theta)
+        #print("Max llh={}".format(np.max(loglh)))
         if not np.isfinite(loglh).all():
-            print("weights not finite")
+            print("log likelihoods not finite")
+            sys.exit(0)
+        log_wi_next = loglh - np.log(n) # non-normalised, assumes previous weights are 1./n
+        logsumexp_log_wi_next = logsumexp(log_wi_next)
+        if not np.isfinite(wi_1).all():
+            print("Infinite entries in wi_1: {}".format(np.argwhere(~np.isfinite(wi_1))))
+            sys.exit(0)
+        log_wi_norm = log_wi_next - logsumexp_log_wi_next # normalise weights
+        wi_norm = np.exp(log_wi_norm)
+        wi[:] = np.exp(log_wi_next)
+        if not np.isfinite(wi).all():
+            print("log_wi_next: {}".format(log_wi_next))
+            print("Infinite entries of wi: {}".format(wi[~np.isfinite(wi)]))
+            print("Infinite entries of wi: {}".format(np.argwhere(~np.isfinite(wi))))
+            sys.exit(0)
+        if not np.isfinite(logsumexp_log_wi_next):
+            print("Divide by zero sum of weights. Log sum exp(log_wi_next) = {}".format(logsumexp_log_wi_next))
+            sys.exit(0)
+        logml = logsumexp_log_wi_next - np.log(n)
+        return logml
+
+    @classmethod
+    def experimentalparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
+        Xi[:] = innov(Xi_1,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
+        loglh = lh(Xi,yi,theta)
+        if not np.isfinite(loglh).all():
+            print("log likelihoods not finite")
             nanidx = np.argwhere(~np.isfinite(loglh))
             print (nanidx.shape,loglh[nanidx].shape,np.squeeze(Xi[nanidx,:]).shape)
             print (np.hstack((nanidx,wi[nanidx],np.squeeze(Xi[nanidx,:]),np.squeeze(Xi_1[nanidx,:]))))
             sys.exit(0)
         #loglh = np.nan_to_num(loglh)
-        logml = logsumexp(loglh) - np.log(n)
+        log_wi_next = np.log(wi_1) + loglh # non-normalised
+        logsumexp_log_wi_next = logsumexp(log_wi_next)
         #print("log marginal likelihood = {}".format(logml))
-        wi[:] = np.exp(loglh - logsumexp(loglh)) # normalise weights
-        if wi.sum() == 0:
-            print("Divide by zero sum of weights")
-            #sys.exit(0)
+        if not np.isfinite(wi_1).all():
+            print("Infinite entries of wi_1: {}".format(wi_1[~np.isfinite(wi_1).all()]))
+        log_wi_norm =  log_wi_next - logsumexp_log_wi_next # normalise weights
+        wi_norm = np.exp(log_wi_norm)
+        wi[:] = np.exp(log_wi_next)
+        if not np.isfinite(wi).all():
+            print("Infinite entries of wi: {}".format(wi[~np.isfinite(wi).all()]))
+        if not np.isfinite(logsumexp_log_wi_next):
+            print("Divide by zero sum of weights. Log sum exp(log_wi_next) = {}".format(logsumexp_log_wi_next))
+            print("sum log wi = {} ".format(log_wi_next.sum()))
+            print("Infinite entries of loglh: {}".format(loglh[~np.isfinite(loglh).all()]))
+            print("Zero entries of wi_1: {}".format(wi_1[wi_1==0]))
+            print("Infinite entries of wi_1: {}".format(wi_1[~np.isfinite(wi_1).all()]))
+            print("Infinite entries of wi: {}".format(wi[~np.isfinite(wi).all()]))
+            print("Zero entries of wi: {}".format(wi[wi==0]))
+            print("wi_1: {}".format(wi_1[:]))
+            print("wi: {}".format(wi[:]))
+            sys.exit(0)
         #print("n = {}, ess = {}".format(n,1./sum(wi**2)))
-        if 1./sum(wi**2) < 0.5*n:
+        if 1./np.exp(logsumexp(2*log_wi_norm)) < 0.5*n:
             #print("Resampling, ess = {}".format(1./sum(wi**2)))
-            Xianc[:]=cls.resample(wi)
+            Xianc[:]=cls.resample(wi_norm)
             Xi[:]=Xi[Xianc,:]
+            #wi[:]=wi[Xianc]
+            #logsumexp_log_wi_next = logsumexp(np.log(wi))
+            #logsumexp_log_wi_next = logsumexp(np.log(wi[Xianc])) # use resampled particle weights for marginal likelihood
+            wi[:]=1./n
+        #logml = logsumexp(loglh) - np.log(n)
+        logml = logsumexp_log_wi_next - np.log(n)
         return logml
 
     #def temp_debug(self):
@@ -146,10 +212,10 @@ class pmpfl(object):
         n = weights.shape[0]
         indices = np.zeros_like(weights)
         #C = [0.] + [sum(weights[:i+1]) for i in range(n)]
-        C = np.cumsum(weights)
+        C = np.cumsum(weights) * n
         u0, j = np.random.uniform(), 0
         for i in range(n):
-            u = (u0+i)/n
+            u = u0+i
             while u > C[j]:
                 j+=1
             indices[i] = j

@@ -52,13 +52,22 @@ def logsumexp_gpu(ns,out,m):
     start = cuda.grid(1)
     stride = cuda.gridsize(1)
     #m = max_gpu(ns)
-    tmp = cuda.local.array(ns.shape)
+    #tmp = cuda.local.array(ns.shape)
     for i in range(start, ns.shape[0], stride):
-        tmp[i] = math.exp(ns[i] - m)
-    my_sum(out,tmp)
+        ns[i] = math.exp(ns[i] - m)
+    my_sum(out,ns)
     #m = np.zeros(1,dtype=np.float64)
     #my_max(m,ns)
     #return math.log(my_sum(np.exp(ns-np.max(ns)))) + np.max(ns)
+
+@cuda.reduce
+def constsumexp_reduce(x,m):
+    return math.exp(x + m)
+
+@cuda.jit
+def logsumexp(a, b):
+    return a + b
+
 
 @cuda.jit
 def run_logsumexp_gpu(ns,out,m):

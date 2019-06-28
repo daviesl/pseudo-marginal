@@ -1,4 +1,6 @@
 import numpy as np
+import numba
+from numba import jit, float64
 from pmmcmc import pmpfl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
@@ -12,58 +14,8 @@ class lorenz_63_ssm(object):
         print("Dummy")
     def synthetic(self):
         print("Dummy")
-        
-obsinterval = 40
 
-def innov(X,theta):
-    global obsinterval
-    dt=0.001 # TODO make DRY
-    trth=tr_theta(theta)
-    trX=X2tr(X)
-    Xnext=np.zeros_like(trX)
-    Xnext[:]=trX[:]
-    for i in range(obsinterval): # TODO make this every 40th DRY
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        Xnext[:,0]=Xnext[:,0]+(xdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
-        Xnext[:,1]=Xnext[:,1]+(ydot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
-        Xnext[:,2]=Xnext[:,2]+(zdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
-    rtXnext=tr2X(Xnext)
-    return rtXnext
-
-def tr_theta(theta):
-    #return np.array([10,28,2.667])
-    #uniform
-    return theta*np.array([18.,36.,5]) + np.array([10,28,2.667]) - np.array([9,18,0.667])
-    #Normal
-    #return np.power(1.4,theta*2) + np.array([10,28,2.667]) - 1.
-    #return theta + np.array([10,28,2.667])
-
-def X2tr(X):
-    # normal(0,1)
-    #return np.column_stack((X[:,0]*20.0,X[:,1]*20,np.exp(X[:,2])*5+0.8))
-    return np.column_stack((X[:,0]*20.0,X[:,1]*20,X[:,2]*5+0.8))
-    # uniform(0,1)
-    # return 100*(X-0.5)
-
-def tr2X(tr):
-    # normal(0,1)
-    #return tr/20.0
-    return np.column_stack((tr[:,0]/20.0,tr[:,1]/20,(tr[:,2]-0.8)/5))
-    # uniform(0,1)
-    # return X/100+0.5
-
-# log likelihood
-# TODO add parameters
-def lh(X,y):
-    # what is the scale of the observation noise? Assuming 1 in all x,y,z
-    dim=y.shape[0]
-    trX=X2tr(X)
-    simy = obseqn(trX,sigma=0)
-    d = (simy-y)*(1/np.sqrt(1))  # TODO find a way to DRY this obs error
-    dd = np.sum(d**2,axis=1)
-    return (-0.5*(dd)) #- np.log(np.sqrt((2*np.pi)**dim))
-
-
+@jit #("UniTuple(float64[:],3)(float64[:],float64[:],float64[:],float64,float64,float64)")
 def lorenz(x, y, z, s=10, r=28, b=2.667):
     '''
     Given:
@@ -77,6 +29,82 @@ def lorenz(x, y, z, s=10, r=28, b=2.667):
     y_dot = r*x - y - x*z 
     z_dot = x*y - b*z 
     return x_dot, y_dot, z_dot
+        
+obsinterval = 40
+obserr = 1.
+dt = 0.001
+
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov(X,theta):
+    global obsinterval
+    global dt #=0.001 # TODO make DRY
+    trth=tr_theta(theta)
+    trX=X2tr(X)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    #print("Xnext_pre = {}".format(Xnext))
+    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        Xnext[:,0]=Xnext[:,0]+(xdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
+        Xnext[:,1]=Xnext[:,1]+(ydot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
+        Xnext[:,2]=Xnext[:,2]+(zdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
+        #print("Xnext = {}".format(Xnext))
+        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
+        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
+    rtXnext=tr2X(Xnext)
+    return rtXnext
+
+
+@numba.jit("float64[:](float64[:])")
+def tr_theta(theta):
+    #return np.array([10,28,2.667])
+    #target = np.array([10.,28.,2.667])
+    target = np.array([20.,40.,10.])
+    lower = target * 0.1
+    upper = target + (target - lower)
+    #uniform
+    return theta*(upper-lower) + lower
+    #Normal
+    #return np.power(1.4,theta*2) + np.array([10,28,2.667]) - 1.
+    #return theta + np.array([10,28,2.667])
+
+
+@numba.jit #("float64[:][:](float64[:][:])")
+def X2tr(X):
+    return np.column_stack((X[:,0]*20.0,X[:,1]*20.0,X[:,2]*5.+0.8))
+
+@numba.jit #("float64[:][:](float64[:][:])")
+def tr2X(tr):
+    return np.column_stack((tr[:,0]/20.0,tr[:,1]/20.0,(tr[:,2]-0.8)/5.))
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
+def xTPx(x,P):
+    return np.sum(np.dot(x,P)*x,axis=1)
+
+# log likelihood
+# TODO add parameters
+@numba.jit #("float64[:](float64[:][:],float64[:],float64[:],float64[:][:])")
+def lh(X,y,theta,cov=np.array([[obserr**2,0],[0,obserr**2]])):
+    # what is the scale of the observation noise? Get dimension of Y
+    dim=y.shape[-1]
+    #print("Dim  == {}".format(dim))
+    trX=X2tr(X)
+    y_star = obseqn(trX)
+    d = y_star-y
+    dd = xTPx(d,np.linalg.inv(cov))
+    # chris says we need to compute the normalising constant
+    log_lh_un = (-0.5*(dd)) 
+    #print("DD = {}".format(log_lh_un))
+    norm_const = - (dim*0.5) * np.log(2*np.pi) - 0.5 * np.log(np.linalg.det(cov))
+    #print("Norm const = {}".format(norm_const))
+    #print(log_lh_un + norm_const)
+    return log_lh_un + norm_const
+
+# write pseudocode in latex for chris
+
+
 
 
 
@@ -96,7 +124,7 @@ def synthetic(dt=0.001,num_steps=10000,x0=0.,y0=1.,z0=1.05,xW=1.,yW=1.,zW=1.,xO=
         Xs[i + 1,0] = Xs[i,0] + (x_dot * dt)+ xW*np.random.normal(0,np.sqrt(dt)) 
         Xs[i + 1,1] = Xs[i,1] + (y_dot * dt)+ yW*np.random.normal(0,np.sqrt(dt))
         Xs[i + 1,2] = Xs[i,2] + (z_dot * dt)+ zW*np.random.normal(0,np.sqrt(dt))
-    Ys = obseqn(Xs[::obsinterval])
+    Ys = obseqn_with_noise(Xs[::obsinterval],np.array([[obserr**2,0],[0,obserr**2]]))
     return (Xs,Ys)
 
 def plot_synthetic(Xs,Ys):
@@ -116,11 +144,16 @@ def plot_synthetic(Xs,Ys):
     ax2.set_title("State")
     plt.show()
 
-def obseqn(Xs,sigma=1.):
+def obseqn(Xs): #,sigma=np.array([obserr,obserr])):
     dim = Xs.shape[0]
     Ys = np.zeros((dim,2))
-    Ys[:,0] = Xs[:,0] + np.random.normal(0,np.sqrt(sigma),dim)
-    Ys[:,1] = Xs[:,2] + np.random.normal(0,np.sqrt(sigma),dim)
+    Ys[:,0] = Xs[:,0] #+ np.random.normal(0,np.sqrt(sigma[0]),dim)
+    Ys[:,1] = Xs[:,2] #+ np.random.normal(0,np.sqrt(sigma[1]),dim)
+    return Ys
+
+def obseqn_with_noise(Xs,cov=np.array([[obserr**2,0],[0,obserr**2]])):
+    dim = cov.shape[0]
+    Ys = obseqn(Xs) + np.random.multivariate_normal(np.zeros(dim),cov,size=Xs.shape[0])
     return Ys
 
 def plot_traces(chain_length,estparams,ml):
@@ -149,20 +182,45 @@ def plot_traces(chain_length,estparams,ml):
     plt.show()
 
 if __name__ == '__main__':
-    dt = 0.001
-    num_steps = 12800
-    X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
+    num_steps = 1600 #12800*2
+    X0_ = np.array([0,1,1.05])
+    X0_ = X0_[np.newaxis,:]
+    #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
+    X0_mu = tr2X(X0_)
+    print("X0_mu = {}".format(X0_mu))
     X,Y = synthetic(dt=dt,num_steps=num_steps)
-    print(Y)
+    print("Y = {}".format(Y))
     
-    n=2000
+    n=1024
     chain_length=1000
 
     # run pmmh
     sampler = pmpfl(innov,lh,Y,3,3,n)
 
-    if True:
+    if False:
         plot_synthetic(X,Y)
+        # Assert transformation is correct
+        XtrX = X2tr(tr2X(X))
+        print("X = {}, XtrX = {}".format(X,XtrX))
+        assert((np.abs(X - XtrX) < 0.00001).all())
+        # print likelihood of true solution
+        T = Y.shape[0]+1
+        testX = np.zeros((T,n,3))
+        testX[0,:] = X0_
+        log_lh = np.zeros(T)
+        for i in range(1,T):
+           testX[i,:] = X2tr(innov(tr2X(testX[i,:]),np.array([10.,28.,2.667])))
+           #print("X[i,:]={}, Y[i-1,:]={}".format(X[i,:],Y[i-1,:]))
+           log_lh[i] = lh(tr2X(X[np.newaxis,i-1,:]),Y[np.newaxis,i-1,:],np.zeros(3)) # last arg theta unused
+           print("log lh at i={} is {}".format(i,log_lh[i]))
+
+        print("synthetic observations T={} have log lh sum = {}".format(T-1,log_lh.sum()))
+        fig = plt.figure()
+        plt.plot(log_lh)
+        plt.show()
+        #fig = plt.figure()
+        #plt.plot(testX[:,:,0])
+        #plt.show()
         ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:])
     
         print("Log Marginal likelihood: Mean = {} Std Dev = {}".format(ml_test.mean(),ml_test.std()))
@@ -172,7 +230,7 @@ if __name__ == '__main__':
         ax2.boxplot(ml_test)
         plt.show()
 
-    if False:
+    if True:
         plot_synthetic(X,Y)
         estparams,ml,ar = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]))
 

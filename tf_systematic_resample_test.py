@@ -10,22 +10,13 @@ if device_name == "gpu":
 else:
     device_name = "/cpu:0"
 
-#def repeat_by(x,rep):
-#    
-#    #return tf.map_fn(lambda v: tf.fill(v[0],v[1]), tf.transpose(tf.stack(rep,x)))
-
 def tf_int_diff(a,firstelcomp):
     """
     Diff along axis 0
     The first element of the input array is compared against firstelcomp.
     Output is same dimensions as a.
     """
-    #b=tf.zeros_like(a)
-    #b[0]=a[0]-firstelcomp
-    #b[1:]=a[1:]-a[:-1]
-    #return tf.concat(axis=0,values=[tf.convert_to_tensor([tf.cast(a[0]-firstelcomp,tf.int32)]),tf.cast(a[1:]-a[:-1],tf.int32)])
     return tf.concat(axis=0,values=[tf.convert_to_tensor([a[0]-firstelcomp]),a[1:]-a[:-1]])
-    #return tf.concat(axis=0,values=[tf.convert_to_tensor([0]),a[1:]-a[:-1]])
 
 def cond(counts,offsets,idx,n,i,iters):
     return tf.less(i,iters)
@@ -42,58 +33,39 @@ def body(counts,offsets,idx,n,i,iters):
 
 def systematic_resample_tf(weights):
     global nparticles
-    # cumsum * n - unif(0,1)
-    C = tf.math.cumsum(weights) * tf.constant(nparticles,dtype=tf.float32) - tf.random.uniform((1,))
-    # "changes" in the floor(cumsum) indicate sample points
-    # idx returned by unique has length n, but we want only indices of the changes
-    # do a diff and find the indices of the non-zero elements
-    # these will be our resample indices
+    C = tf.cast(tf.math.cumsum(weights),tf.float64) * tf.constant(nparticles,dtype=tf.float64) - tf.random.uniform((1,),dtype=tf.float64)
+    #C = tf.math.cumsum(weights) * tf.constant(nparticles,dtype=tf.float64) - 0.5
     floor_C = tf.cast(tf.floor(C),tf.int32)
     diff_floor_C = tf_int_diff(floor_C,tf.constant(-1,dtype=tf.int32))
     nonzero_mask = tf.not_equal(diff_floor_C,tf.constant(0,dtype=tf.int32))
     resample_idx = tf.boolean_mask(tf.range(nparticles),nonzero_mask)
     # compute counts for resampled points
     resample_count = tf.boolean_mask(diff_floor_C,nonzero_mask)
-    #resample_tensor_offset = tf.cumsum(resample_count)
     resample_tensor_offset = tf.boolean_mask(floor_C,nonzero_mask)
     # repeat elements in resample_idx by counts in resample_count
     # while loop that will scatter update a tensor
     iters = tf.reduce_max(resample_count)
     i=tf.constant(0)
-    rc_, ro_, ri_, n_,i_,iters_ = tf.while_loop(cond,body,[resample_count,resample_tensor_offset,resample_idx,nparticles,i,iters])
-    with tf.control_dependencies([i_]):
-        return tf.get_variable("indices",[nparticles],dtype=tf.int32,initializer=tf.initializers.constant(0))
+    #rc_, ro_, ri_, n_,i_,iters_ = tf.while_loop(cond,body,[resample_count,resample_tensor_offset,resample_idx,nparticles,i,iters])
+    #with tf.control_dependencies([i_,rc_,ro_,ri_,n_,iters_]):
+    res=tf.while_loop(cond,body,[resample_count,resample_tensor_offset,resample_idx,nparticles,i,iters])
+    indices= tf.get_variable("indices",[nparticles],dtype=tf.int32,initializer=tf.initializers.constant(0))
+    with tf.control_dependencies(res):
+        return res,indices
 
 with tf.device(device_name):
-    #random_matrix = tf.sigmoid(tf.random_uniform(shape=(nparticles,), minval=-10, maxval=3))
-    random_matrix = tf.cast(tf.sigmoid(tf.linspace(num=nparticles, start=-10., stop=3.)),tf.float64)
-    weights = random_matrix/tf.math.reduce_sum(random_matrix)
-    #def systematic_resample_tf(weights)
-    #global nparticles
-    #C = tf.math.cumsum(weights) * tf.constant(nparticles,dtype=tf.float32) - tf.random.uniform((1,))
-    C = tf.math.cumsum(weights) * tf.constant(nparticles,dtype=tf.float64) - 0.5
-    floor_C = tf.cast(tf.floor(C),tf.int32)
-    diff_floor_C = tf_int_diff(floor_C,tf.constant(-1,dtype=tf.int32))
-    nonzero_mask = tf.not_equal(diff_floor_C,tf.constant(0,dtype=tf.int32))
-    resample_idx = tf.boolean_mask(tf.range(nparticles),nonzero_mask)
-    # compute counts for resampled points
-    resample_count = tf.boolean_mask(diff_floor_C,nonzero_mask)
-    resample_tensor_offset = tf.boolean_mask(floor_C,nonzero_mask)
-    # repeat elements in resample_idx by counts in resample_count
-    # while loop that will scatter update a tensor
-    iters = tf.reduce_max(resample_count)
-    i=tf.constant(0)
-    rc_, ro_, ri_, n_,i_,iters_ = tf.while_loop(cond,body,[resample_count,resample_tensor_offset,resample_idx,nparticles,i,iters])
-    with tf.control_dependencies([i_]):
-        indices = tf.get_variable("indices",[nparticles],dtype=tf.int32,initializer=tf.initializers.constant(0))
-        #indices = systematic_resample_tf(weights)
-        weights2 = tf.gather(weights,indices)
+    random_matrix = tf.sigmoid(tf.random_uniform(shape=(nparticles,), minval=-10, maxval=3))
+    #random_matrix = tf.sigmoid(tf.linspace(num=nparticles, start=-10., stop=3.))
+    weights = tf.cast(random_matrix/tf.math.reduce_sum(random_matrix),tf.float64)
+    i_,indices = systematic_resample_tf(weights)
+    weights2 = tf.gather(weights,indices)
 
 startTime = datetime.now()
 with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,log_device_placement=True)) as session:
+#with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as session:
     init = tf.global_variables_initializer()
     result = session.run(init)
-    if True:
+    if False:
         result_randmat = session.run(random_matrix)
         result_weights = session.run(weights)
         result_C = session.run(C)
@@ -117,16 +89,10 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,log_device_place
         print("Resamp Offset       ",result_resampoff)
         print("Iters = max count",result_iters)
         print("Indices",result_indices)
+        print("Final Iters after while loop",result_finaliters)
+    result_finaliters = session.run(i_)
     result_weights2 = session.run(weights2)
     print("Final Weights",result_weights2)
-    print("Final Iters after while loop",result_finaliters)
-    if False:
-        printop3 = tf.print("weights: ",weights,output_stream=sys.stdout)
-        printop4 = tf.print("resampled weights: ",weights2,output_stream=sys.stdout)
-        with tf.control_dependencies([printop3,printop4]):
-            print(result)
-            print(weights)
-            print(weights2)
 
 # It can be hard to see the results on the terminal with lots of output -- add some newlines to improve readability.
 print("\n" * 5)
@@ -134,6 +100,26 @@ print("Shape:", nparticles, "Device:", device_name)
 print("Time taken:", datetime.now() - startTime)
 
 print("\n" * 5)
+
+def py_stratified_resample(weights):
+    n = weights.shape[0]
+    indices = np.zeros_like(weights)
+    C = np.cumsum(weights)
+    u0, j = np.random.uniform(), 0
+    for i in range(n):
+        u = (u0+i)/n
+        while u > C[j]:
+            j+=1
+        indices[i] =  j
+    return indices
+
+startTime = datetime.now()
+w = np.random.uniform(0.,1.,nparticles)
+w2 = py_stratified_resample(w)
+print(w2)
+print("Shape:", nparticles)
+print("Time taken:", datetime.now() - startTime)
+
 
 if False:
     print("unused")
