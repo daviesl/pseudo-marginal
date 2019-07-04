@@ -1,4 +1,5 @@
 import numpy as np
+import numba
 from scipy.stats import norm
 #from scipy.misc import logsumexp
 import sys
@@ -39,15 +40,15 @@ class pmpfl(object):
         self.n = n
         self.innov = innov
         self.lh = lh
-    def test_particlefilter(self,num_runs,X0):
-        theta=np.zeros((self.theta_size))
+    def test_particlefilter(self,num_runs,X0,theta0):
+        theta=theta0 #np.zeros((self.theta_size))
         logml_chain=np.zeros((num_runs))
         for j in range(num_runs):
             self.X_all[0,:] = X0
             #print("X_all[0,:] = {}".format(self.X_all[0,:]))
             log_ml = np.zeros(self.T)
             for i in range(1,self.T):
-                log_ml[i] = self.bootstrapparticlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
+                log_ml[i] = self.particlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
                 #print("X_all[{},:] = {}".format(i,self.X_all[i,:]))
                 #print("X_all[{},:] = {}, y={}".format(i,self.X_all[i,:],self.y_all[i-1,:]))
                 #print("y={}".format(self.y_all[i-1,:]))
@@ -60,22 +61,52 @@ class pmpfl(object):
         return logml_chain
             
         
-    def run_pmmh(self,mcmc_chain_size,X0_mu,X0_sigma):
+    def run_pmmh(self,mcmc_chain_size,X0_mu,X0_sigma,theta0=None,pcov0=None):
         #seq = zip(self.X_all,self.y_all,self.X_ancestry, self.w_all)
         # init priors, data is unseen at t=0
-        theta = np.zeros((mcmc_chain_size,self.theta_size))
+        if theta0 is not None:
+            theta = np.tile(theta0,(mcmc_chain_size,1))
+        else:
+            theta = np.ones((mcmc_chain_size,self.theta_size)) * 0.5
         ar = np.zeros(mcmc_chain_size)
         logml_chain=np.ones((mcmc_chain_size))
         logml_chain[:]=np.finfo(float).min
         # don't store all of the priors, just the last one
         prior_j=0
-        prior_j_1=0
+        prior_j_1=1.0
+        initprop = 0.0001
+        if pcov0 is not None:
+            pcov = pcov0
+        else:
+            pcov = np.eye(self.theta_size) * initprop
         for j in range(mcmc_chain_size):
             if j>0:
+                thetamean = np.mean(theta[:j,:],axis=0)
+                ar_k = np.sum(ar[:j])*1./max(1,j-1)
+                if j < 2 or ar_k == 0:
+                    covnorm = 1.
+                    #pcov = np.eye(self.theta_size) * 0.0001
+                    propscale = 1.0
+                else:
+                    propscale = np.exp((2*self.theta_size)*(ar_k-0.44))
+                    propscale = min(10.0,max(0.0001,propscale))
+                    covnorm = (1./(j-1))
+                    #pcov[:]=0
+                    pcov = np.eye(self.theta_size) * 0.0000001 # condition
+                    # update cov
+                    for k in range(j):
+                        pcov += np.outer(theta[k,:]-thetamean,theta[k,:]-thetamean)*covnorm
+                # decompose 
+                #evals,evecs = np.linalg.eig(pcov)
+                # propose multivariate random normal
+                prop = np.random.multivariate_normal(np.zeros(self.theta_size),pcov*propscale)
+                print("Proposing theta += {}, propscale = {}, ar_k = {}, pcov = {}".format(prop, propscale, ar_k, pcov))
+                theta[j,:]=theta[j-1,:]+prop
                 #propose theta using normal dist ar= 0.328
-                #theta[j,:]=theta[j-1,:]+np.random.normal(0,0.2,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                #theta[j,:]=theta[j-1,:]+np.random.normal(0,0.05,self.theta_size) # assuming the innov function scales the parameters appropriately.
                 #propose theta using unif indep ar=0.499
-                theta[j,:]=np.random.uniform(0,1,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                #theta[j,:]=np.random.uniform(0,1,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                
             # use a uniform prior
             prior_j = float(np.all(theta[j,:] <= 1) * np.all(theta[j,:] >= 0))
             #prior_j = norm.pdf(theta[j,:]).prod()
@@ -97,39 +128,47 @@ class pmpfl(object):
             #print(self.X_all[0,:])
             log_ml = np.zeros(self.T)
             for i in range(1,self.T):
-                log_ml[i] = self.bootstrapparticlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[j,:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
+                log_ml[i] = self.particlefilter(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[j,:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov)
             # compute marginal likelihood of particle filter
             logml_chain[j] = log_ml.sum() # product of all marignal likelihoods
             ##print("1_Marginal likelihood at {} is {}".format(j, ml_j))
             if j > 0:
                 #acceptance ratio
                 #log_a = min(0,logml_chain[j]+np.log(prior_j_1)-logml_chain[j-1]-np.log(prior_j)) # assuming normal priors on parameters
-                log_a = min(0,logml_chain[j]+np.log(prior_j_1)-logml_chain[j-1]-np.log(prior_j)) # assuming normal priors on parameters
+                #log_a = min(0,logml_chain[j]+np.log(prior_j_1)-logml_chain[j-1]-np.log(prior_j)) # assuming normal priors on parameters
+                log_a = min(0,logml_chain[j]+np.log(prior_j)-logml_chain[j-1]-np.log(prior_j_1)) # assuming normal priors on parameters
                 # compute unif(0,1)
                 log_u = np.log(np.random.uniform(0,1))
+                print("Log a = {}, log_u = {}, accepting = {}".format(log_a,log_u,log_a>=log_u))
                 if log_a>=log_u:
-                    logml_chain[j-1] = logml_chain[j]
                     # keep the proposed theta and X_all
                     ar[j]=1
                 else:
                     # backtrack to the last theta and state X_all TODO do I need to store last state?
                     theta[j,:] = theta[j-1,:] 
+                    logml_chain[j] = logml_chain[j-1]
                     ar[j]=0
             else:
                 logml_chain[j-1] = logml_chain[j]
                 prior_j_1 = prior_j
             print("Theta at {} is {} {} {}".format(j,theta[j,0],theta[j,1],theta[j,2]))
             print("Marginal likelihood at {} is {}".format(j, logml_chain[j]))
-        return (theta,logml_chain,ar)
+        return (theta,logml_chain,ar,pcov*propscale)
 
 #    def run_pmgibbs(self,mcmc_chain_size):
 #        # ancestry trace the final target distrubution particles and sum the weights for each
-        
+    @classmethod
+    def particlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
+        if False:
+            return cls.bootstrapparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
+        elif True:
+            return cls.experimentalparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
+
     @classmethod
     def bootstrapparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
         # Always resample, and at the start because innov() will disperse according to random effects in SDE
         wi_1_norm = np.exp(np.log(wi_1) - logsumexp(np.log(wi_1)))
-        Xianc[:]=cls.resample(wi_1_norm)
+        Xianc[:]=resample(wi_1_norm)
         #print("Resample count = {}".format(np.unique(Xianc[:]).shape[0]))
         #print("Resample indices = {}".format(Xianc[:]))
         Xi_1_rs=Xi_1[Xianc[:],:]
@@ -194,7 +233,7 @@ class pmpfl(object):
         #print("n = {}, ess = {}".format(n,1./sum(wi**2)))
         if 1./np.exp(logsumexp(2*log_wi_norm)) < 0.5*n:
             #print("Resampling, ess = {}".format(1./sum(wi**2)))
-            Xianc[:]=cls.resample(wi_norm)
+            Xianc[:]=resample(wi_norm)
             Xi[:]=Xi[Xianc,:]
             #wi[:]=wi[Xianc]
             #logsumexp_log_wi_next = logsumexp(np.log(wi))
@@ -207,19 +246,20 @@ class pmpfl(object):
     #def temp_debug(self):
         #print(loglh)
 
-    @classmethod
-    def resample(cls,weights):
-        n = weights.shape[0]
-        indices = np.zeros_like(weights)
-        #C = [0.] + [sum(weights[:i+1]) for i in range(n)]
-        C = np.cumsum(weights) * n
-        u0, j = np.random.uniform(), 0
-        for i in range(n):
-            u = u0+i
-            while u > C[j]:
-                j+=1
-            indices[i] = j
-        return indices
+@numba.jit
+def resample(weights):
+    n = weights.shape[0]
+    indices = np.zeros_like(weights)
+    #C = [0.] + [sum(weights[:i+1]) for i in range(n)]
+    C = np.cumsum(weights) * n
+    u0 = np.random.uniform(0,1)
+    j = 0
+    for i in range(n):
+        u = u0+i
+        while u > C[j]:
+            j+=1
+        indices[i] = j
+    return indices
     
 
 def pmmcmc(n=1000,alpha=0.5):
