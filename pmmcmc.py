@@ -86,10 +86,12 @@ class pmpfl(object):
                 if j < 2 or ar_k == 0:
                     covnorm = 1.
                     #pcov = np.eye(self.theta_size) * 0.0001
-                    propscale = 1.0
+                    #propscale = 1.0
+                    propscale = (2.38)**2/self.theta_size
                 else:
-                    propscale = np.exp((2*self.theta_size)*(ar_k-0.44))
-                    propscale = min(10.0,max(0.0001,propscale))
+                    #propscale = np.exp((2*self.theta_size)*(ar_k-0.44))
+                    #propscale = min(10.0,max(0.0001,propscale))
+                    propscale = (2.38)**2/self.theta_size
                     covnorm = (1./(j-1))
                     #pcov[:]=0
                     pcov = np.eye(self.theta_size) * 0.0000001 # condition
@@ -153,7 +155,7 @@ class pmpfl(object):
                 prior_j_1 = prior_j
             print("Theta at {} is {} {} {}".format(j,theta[j,0],theta[j,1],theta[j,2]))
             print("Marginal likelihood at {} is {}".format(j, logml_chain[j]))
-        return (theta,logml_chain,ar,pcov*propscale)
+        return (theta,logml_chain,ar,pcov)
 
 #    def run_pmgibbs(self,mcmc_chain_size):
 #        # ancestry trace the final target distrubution particles and sum the weights for each

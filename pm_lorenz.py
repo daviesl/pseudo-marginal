@@ -209,7 +209,7 @@ if __name__ == '__main__':
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 1600 #12800 # 1600
+    num_steps = 12800 #3200 #12800 # 1600
     X0_ = np.array([0,1,1.05])
     X0_ = X0_[np.newaxis,:]
     #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -218,16 +218,17 @@ if __name__ == '__main__':
 
 
 
-    X,Y = synthetic(dt=dt,num_steps=num_steps)
-    np.save("synthetic_X_{}".format(timestr),X)
-    np.save("synthetic_Y_{}".format(timestr),Y)
-    print("Y = {}".format(Y))
+    if actionflag == 't' or actionflag == 'r':
+        X,Y = synthetic(dt=dt,num_steps=num_steps)
+        np.save("synthetic_X_{}".format(timestr),X)
+        np.save("synthetic_Y_{}".format(timestr),Y)
+        print("Y = {}".format(Y))
 
-    n=1024 #16384 #512
-    chain_length=1000
+        n=16384 #2048 #512
+        chain_length=10000
 
-    # run pmmh
-    sampler = pmpfl(innov,lh,Y,3,3,n)
+        # run pmmh
+        sampler = pmpfl(innov,lh,Y,3,3,n)
 
     if actionflag == 't':
         plot_synthetic(X,Y)
