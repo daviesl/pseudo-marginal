@@ -17,6 +17,7 @@ class lorenz_63_ssm(object):
     def synthetic(self):
         print("Dummy")
 
+
 @jit #("UniTuple(float64[:],3)(float64[:],float64[:],float64[:],float64,float64,float64)")
 def lorenz(x, y, z, s=10, r=28, b=2.667):
     '''
@@ -35,10 +36,90 @@ def lorenz(x, y, z, s=10, r=28, b=2.667):
 obsinterval = 40
 obserr = 0.1
 dt = 0.001
+obserr_mat = np.array([[obserr**2,0],[0,obserr**2]])
 
+#@numba.jit
+#def mu_mdb(mu_k,x_k,y_J,vk,dk,obsvar):
+#    return mu_k + (vk*(y_J-(x_k+mu_k*dk)))/(vk*dk + obsvar)
 
 @numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def innov(X,theta):
+def innov_residual_bridge(X_k,y_J,theta):
+    global obsinterval
+    global obserr_mat
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X_k)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    Xshape0 = X_k.shape[0]
+    #print("Xnext_pre = {}".format(Xnext))
+    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
+    vk = 1**2 # Wiener random process sigma is 1 for each component.
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        dk = (obsinterval - i) * dt
+        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat) # updated precision matrix
+        psi_mdb = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
+        #psi = vk - (vk**2 * dt)/(vk * dk + obserr**2) # TODO make this distinct for each observed y... because obs error is different per different variables
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        mu_t = np.column_stack((xdot,zdot,ydot)) # partitioned to observed and latent
+        mu_tx = np.column_stack((xdot,zdot)) # partitioned to observed and latent
+        mu_x_mdb = mu_tx + np.dot(P_k,(y_J - (Xnext[:,::2] + mu_tx * dk)).T).T
+        # The below multivariate_normal() is not supported by Numba!
+        #dW_t = np.random.multivariate_normal(0,dt*psi_mdb,Xshape0)
+        dW_t_0 = np.random.normal(0,np.sqrt(dt*psi_mdb[0,0]),Xshape0)
+        dW_t_1 = np.random.normal(0,np.sqrt(dt),Xshape0)
+        dW_t_2 = np.random.normal(0,np.sqrt(dt*psi_mdb[1,1]),Xshape0)
+        #print("mu_x_mdb = {}".format(mu_x_mdb))
+        #print("mu_x_mdb.shape = {}".format(mu_x_mdb.shape))
+        Xnext[:,0]=Xnext[:,0]+(mu_x_mdb[:,0]*dt) + dW_t_0 #dW_t[:,0]
+        Xnext[:,1]=Xnext[:,1]+(mu_t[:,2]*dt) + dW_t_1 # dW_t[:,2] # latent
+        Xnext[:,2]=Xnext[:,2]+(mu_x_mdb[:,1]*dt) + dW_t_2 # dW_t[:,1]
+        #print("Xnext = {}".format(Xnext))
+        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
+        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
+    rtXnext=tr2X(Xnext)
+    return rtXnext
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov_diffusion_bridge(X_k,y_J,theta):
+    global obsinterval
+    global obserr_mat
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X_k)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    Xshape0 = X_k.shape[0]
+    #print("Xnext_pre = {}".format(Xnext))
+    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
+    vk = 1**2 # Wiener random process sigma is 1 for each component.
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        dk = (obsinterval - i) * dt
+        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat) # updated precision matrix
+        psi_mdb = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
+        #psi = vk - (vk**2 * dt)/(vk * dk + obserr**2) # TODO make this distinct for each observed y... because obs error is different per different variables
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        mu_t = np.column_stack((xdot,zdot,ydot)) # partitioned to observed and latent
+        mu_tx = np.column_stack((xdot,zdot)) # partitioned to observed and latent
+        mu_x_mdb = mu_tx + np.dot(P_k,(y_J - (Xnext[:,::2] + mu_tx * dk)).T).T
+        # The below multivariate_normal() is not supported by Numba!
+        #dW_t = np.random.multivariate_normal(0,dt*psi_mdb,Xshape0)
+        dW_t_0 = np.random.normal(0,np.sqrt(dt*psi_mdb[0,0]),Xshape0)
+        dW_t_1 = np.random.normal(0,np.sqrt(dt),Xshape0)
+        dW_t_2 = np.random.normal(0,np.sqrt(dt*psi_mdb[1,1]),Xshape0)
+        #print("mu_x_mdb = {}".format(mu_x_mdb))
+        #print("mu_x_mdb.shape = {}".format(mu_x_mdb.shape))
+        Xnext[:,0]=Xnext[:,0]+(mu_x_mdb[:,0]*dt) + dW_t_0 #dW_t[:,0]
+        Xnext[:,1]=Xnext[:,1]+(mu_t[:,2]*dt) + dW_t_1 # dW_t[:,2] # latent
+        Xnext[:,2]=Xnext[:,2]+(mu_x_mdb[:,1]*dt) + dW_t_2 # dW_t[:,1]
+        #print("Xnext = {}".format(Xnext))
+        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
+        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
+    rtXnext=tr2X(Xnext)
+    return rtXnext
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov(X,y_J,theta):
     global obsinterval
     global dt #=0.001 # TODO make DRY
     trth=theta2tr(theta)
@@ -219,15 +300,23 @@ if __name__ == '__main__':
 
 
     if actionflag == 't' or actionflag == 'r':
-        X,Y = synthetic(dt=dt,num_steps=num_steps)
-        np.save("synthetic_X_{}".format(timestr),X)
-        np.save("synthetic_Y_{}".format(timestr),Y)
+        if (len(sys.argv) > 2):
+            X = np.load(sys.argv[argctr])
+            argctr += 1
+            Y = np.load(sys.argv[argctr])
+            argctr += 1
+            num_steps = X.shape[0] #3200 #12800 # 1600
+        else:
+            X,Y = synthetic(dt=dt,num_steps=num_steps)
+            np.save("synthetic_X_{}".format(timestr),X)
+            np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=16384 #2048 #512
-        chain_length=10000
+        n=512 #16384 #2048 #512
+        chain_length=1000
 
         # run pmmh
+        #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
         sampler = pmpfl(innov,lh,Y,3,3,n)
 
     if actionflag == 't':

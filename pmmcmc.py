@@ -161,9 +161,9 @@ class pmpfl(object):
 #        # ancestry trace the final target distrubution particles and sum the weights for each
     @classmethod
     def particlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
-        if False:
+        if True:
             return cls.bootstrapparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
-        elif True:
+        elif False:
             return cls.experimentalparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
 
     @classmethod
@@ -175,7 +175,7 @@ class pmpfl(object):
         #print("Resample indices = {}".format(Xianc[:]))
         Xi_1_rs=Xi_1[Xianc[:],:]
         #wi[:]=wi[Xianc]
-        Xi[:] = innov(Xi_1_rs,theta)
+        Xi[:] = innov(Xi_1_rs,yi,theta)
         loglh = lh(Xi,yi,theta)
         #print("Max llh={}".format(np.max(loglh)))
         if not np.isfinite(loglh).all():
@@ -202,7 +202,7 @@ class pmpfl(object):
 
     @classmethod
     def experimentalparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
-        Xi[:] = innov(Xi_1,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
+        Xi[:] = innov(Xi_1,yi,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
         loglh = lh(Xi,yi,theta)
         if not np.isfinite(loglh).all():
             print("log likelihoods not finite")
