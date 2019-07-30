@@ -168,28 +168,35 @@ class pmpfl(object):
 
     @classmethod
     def bootstrapparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
-        # Always resample, and at the start because innov() will disperse according to random effects in SDE
-        wi_1_norm = np.exp(np.log(wi_1) - logsumexp(np.log(wi_1)))
-        Xianc[:]=resample(wi_1_norm)
-        #print("Resample count = {}".format(np.unique(Xianc[:]).shape[0]))
-        #print("Resample indices = {}".format(Xianc[:]))
-        Xi_1_rs=Xi_1[Xianc[:],:]
-        #wi[:]=wi[Xianc]
-        Xi[:] = innov(Xi_1_rs,yi,theta)
-        loglh = lh(Xi,yi,theta)
-        #print("Max llh={}".format(np.max(loglh)))
-        if not np.isfinite(loglh).all():
-            print("log likelihoods not finite")
-            sys.exit(0)
-        log_wi_next = loglh - np.log(n) # non-normalised, assumes previous weights are 1./n
-        logsumexp_log_wi_next = logsumexp(log_wi_next)
         if not np.isfinite(wi_1).all():
             print("Infinite entries in wi_1: {}".format(np.argwhere(~np.isfinite(wi_1))))
             sys.exit(0)
-        log_wi_norm = log_wi_next - logsumexp_log_wi_next # normalise weights
-        wi_norm = np.exp(log_wi_norm)
+        # Resample
+        wi_1_norm = np.exp(np.log(wi_1) - logsumexp(np.log(wi_1))) # should be normalised
+        Xianc[:]=resample(wi_1_norm)
+        Xi_1_rs=Xi_1[Xianc[:],:]
+        #wi[:]=wi[Xianc]
+        # Propagatge
+        Xi[:],logpqratio = innov(Xi_1_rs,yi,theta)
+        loglh = lh(Xi,yi,theta)
+        if not np.isfinite(loglh).all():
+            print("log likelihoods not finite")
+            print("Infinite entries of loglh: {}".format(loglh[~np.isfinite(loglh)]))
+            sys.exit(0)
+        # Compute weights
+        log_wi_next = loglh + logpqratio #- np.log(n) # non-normalised, assumes previous weights are 1./n
+        # trying something slightly different
+        max_weight = np.max(log_wi_next)
+        wi_next_conditioned = np.exp(log_wi_next - max_weight)
+        sum_weights = wi_next_conditioned.sum()
+        wi_norm = wi_next_conditioned / sum_weights
+        logsumexp_log_wi_next = max_weight + np.log(sum_weights)
+        #logsumexp_log_wi_next = logsumexp(log_wi_next)
+        #log_wi_norm = log_wi_next - logsumexp_log_wi_next # normalise weights
+        #wi_norm = np.exp(log_wi_norm)
         wi[:] = np.exp(log_wi_next)
         if not np.isfinite(wi).all():
+            print("logpqratio: {}".format(logpqratio))
             print("log_wi_next: {}".format(log_wi_next))
             print("Infinite entries of wi: {}".format(wi[~np.isfinite(wi)]))
             print("Infinite entries of wi: {}".format(np.argwhere(~np.isfinite(wi))))
@@ -202,7 +209,7 @@ class pmpfl(object):
 
     @classmethod
     def experimentalparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
-        Xi[:] = innov(Xi_1,yi,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
+        Xi[:],logpqratio = innov(Xi_1,yi,theta) # TODO the theta here assumes a static timestep. We'll need to record it somehow in the pmpfl main function.
         loglh = lh(Xi,yi,theta)
         if not np.isfinite(loglh).all():
             print("log likelihoods not finite")
@@ -211,14 +218,14 @@ class pmpfl(object):
             print (np.hstack((nanidx,wi[nanidx],np.squeeze(Xi[nanidx,:]),np.squeeze(Xi_1[nanidx,:]))))
             sys.exit(0)
         #loglh = np.nan_to_num(loglh)
-        log_wi_next = np.log(wi_1) + loglh # non-normalised
+        log_wi_next = np.log(wi_1) + loglh + logpqratio # non-normalised
         logsumexp_log_wi_next = logsumexp(log_wi_next)
         #print("log marginal likelihood = {}".format(logml))
         if not np.isfinite(wi_1).all():
             print("Infinite entries of wi_1: {}".format(wi_1[~np.isfinite(wi_1).all()]))
         log_wi_norm =  log_wi_next - logsumexp_log_wi_next # normalise weights
         wi_norm = np.exp(log_wi_norm)
-        wi[:] = np.exp(log_wi_next)
+        wi[:] = np.exp(log_wi_next) # np.exp(log_wi_next)
         if not np.isfinite(wi).all():
             print("Infinite entries of wi: {}".format(wi[~np.isfinite(wi).all()]))
         if not np.isfinite(logsumexp_log_wi_next):

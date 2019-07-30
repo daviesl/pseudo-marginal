@@ -20,7 +20,7 @@ class lorenz_63_ssm(object):
 
 
 @jit #("UniTuple(float64[:],3)(float64[:],float64[:],float64[:],float64,float64,float64)")
-def lorenz(x, y, z, s=10, r=28, b=2.667):
+def lorenz(x, y, z, s=10, r=10., b=2.667):
     '''
     Given:
        x, y, z: a point of interest in three dimensional space
@@ -153,6 +153,8 @@ def innov_diffusion_bridge(X_k,y_J,theta):
         x_mu_em = Xnext + a_t*dt
         Xnext[:] = x_mu_mdb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
         logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
+        #print("logpqratio={}".format(logpqratio[:10]))
+    #print("FINAL logpqratio={}".format(logpqratio[:10]))
     rtXnext=tr2X(Xnext)
     return rtXnext, logpqratio
 
@@ -201,20 +203,20 @@ def innov(X,y_J,theta):
 
 @numba.jit("float64[:](float64[:])")
 def theta2tr(theta):
-    #return np.array([10,28,2.667])
-    target = np.array([10.,28.,2.667])
+    #return np.array([10,10.,2.667])
+    target = np.array([10.,10.,2.667])
     #target = np.array([20.,40.,10.])
     lower = target * 0.2
     upper = target + (target - lower)
     #uniform
     return theta*(upper-lower) + lower
     #Normal
-    #return np.power(1.4,theta*2) + np.array([10,28,2.667]) - 1.
-    #return theta + np.array([10,28,2.667])
+    #return np.power(1.4,theta*2) + np.array([10,10.,2.667]) - 1.
+    #return theta + np.array([10,10.,2.667])
 
 def tr2theta(nt):
     #target = np.array([20.,40.,10.])
-    target = np.array([10.,28.,2.667])
+    target = np.array([10.,10.,2.667])
     lower = target * 0.2
     upper = target + (target - lower)
     return (nt - lower)/(upper-lower)
@@ -316,7 +318,7 @@ def obseqn_with_noise(Xs,cov=np.array([[obserr**2,0],[0,obserr**2]])):
 
 def plot_traces(chain_length,estparams,ml):
     tS=np.ones(chain_length)*10
-    tR=np.ones(chain_length)*28
+    tR=np.ones(chain_length)*10.
     tB=np.ones(chain_length)*2.667
     
     print("Estimated Parameters {}".format(estparams))
@@ -349,7 +351,7 @@ if __name__ == '__main__':
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 3200 #12800 #3200 #12800 # 1600
+    num_steps = 12800 #12800 #3200 #12800 # 1600
     X0_ = np.array([0,1,1.05])
     X0_ = X0_[np.newaxis,:]
     #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -371,7 +373,7 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=1024 #8192 #1024 #16384 #2048 #512
+        n=4096 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
@@ -390,7 +392,7 @@ if __name__ == '__main__':
         #testX[0,:] = X0_
         log_lh = np.zeros(T)
         for i in range(0,T):
-           #testX[i,:] = X2tr(innov(tr2X(testX[i,:]),np.array([10.,28.,2.667])))
+           #testX[i,:] = X2tr(innov(tr2X(testX[i,:]),np.array([10.,10.,2.667])))
            log_lh[i] = lh(tr2X(X[np.newaxis,i*obsinterval,:]),Y[np.newaxis,i,:],np.zeros(3)) # last arg theta unused
            #print("log lh at i={} is {}".format(i,log_lh[i]))
            print("i={}, loglh = {}, X[i,:]={}, Y[i,:]={}".format(i,log_lh[i],tr2X(X[np.newaxis,i*obsinterval,:]),Y[i,:]))
@@ -402,7 +404,7 @@ if __name__ == '__main__':
         #fig = plt.figure()
         #plt.plot(testX[:,:,0])
         #plt.show()
-        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(np.array([10.,28.,2.667])))
+        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(np.array([10.,10.,2.667])))
     
         print("Log Marginal likelihood: Mean = {} Std Dev = {}".format(ml_test.mean(),ml_test.std()))
     
@@ -418,7 +420,7 @@ if __name__ == '__main__':
         #           [-2.23494164e-06, -6.18656485e-06,  7.64138236e-06]])
         burnin = 200
         initial_run = 400
-        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,28.,2.667]))) #,pcov0=pcov_in)
+        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,10.,2.667]))) #,pcov0=pcov_in)
         pcov_in = np.eye(3) * 0.0000001
         thetamean = np.mean(esttheta[burnin:,:],axis=0)
         covnorm = 1./(initial_run-burnin-1)
@@ -426,7 +428,7 @@ if __name__ == '__main__':
             pcov_in += np.outer(esttheta[k,:]-thetamean,esttheta[k,:]-thetamean)*covnorm
         print("P Covariance for second run = {}".format(pcov_in))
 
-        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,28.,2.667])),pcov0=pcov_in)
+        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,10.,2.667])),pcov0=pcov_in)
         print("Acceptance rate = {}".format(1.*ar.sum()/chain_length))
     
         for i in range(estparams.shape[0]):
