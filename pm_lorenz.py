@@ -34,14 +34,125 @@ def lorenz(x, y, z, s=10, r=28, b=2.667):
     z_dot = x*y - b*z 
     return x_dot, y_dot, z_dot
 
-@numba.jit
-def gopy(x,y,sigma=1.5,omega=0.5*(math.sqrt(5)-1)):
-    x_dot = 2. * sigma * np.tanh(x) * np.cos(2.*math.pi*y)
-    y_dot = y + np.mod(omega,1.)
-    return (x_dot,y_dot)
+        
+obsinterval = 40
+obserr = 0.1
+dt = 0.001
+@numba.jit("f8[:,:]()")
+def obserr_mat():
+    global obserr
+    return np.array([[obserr**2,0],[0,obserr**2]])
+@numba.jit("f8[:,:]()")
+def obs_map():
+    return np.array([[1., 0.],
+                    [0., 0.],
+                    [0., 1.]],dtype=np.float64)
 
-#@numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def gopy_innov_diffusion_bridge(X_k,y_J,theta):
+
+@numba.jit
+def innov_lindstrom_residual_bridge(X_k,y_J,theta):
+    """
+    THe weight that we use for this modified diffusion bridge proposal 
+    require the computation of both the proposal q and transition p densitites
+    for w_i=\frac{p(y^i_t|x^i_t}p(x^i_t|x^i_{t-1})}{q(x^i_t|x^i_{t-1})}
+    """
+    global obsinterval
+    global dt 
+    trth=theta2tr(theta)
+    trX=X2tr(X_k)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    _N_ = X_k.shape[0]
+    dim = X_k.shape[1]
+    eta=np.zeros((_N_,dim,obsinterval+1))
+    #eta[:,:,0]=trX[:,:]
+    last_eta = np.zeros_like(trX)
+    last_eta[:]=trX[:]
+    logpqratio=np.zeros(_N_)
+    beta_all = np.eye(3) # process noise on all variables
+    beta_xx = np.eye(2) # process noise on observed variables TODO make F'beta F
+    gamma = 0.25
+    #print ("X_k.shape = {}, eta.shape = {}, last_eta.shape = {}".format(X_k.shape,eta.shape,last_eta.shape))
+    # compute eta, that is the SDE without the stochastic part.
+    for i in range(obsinterval+1): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(last_eta[:,0],last_eta[:,1],last_eta[:,2],trth[0],trth[1],trth[2])
+        a_t = np.column_stack((xdot,ydot,zdot)) 
+        #print("a_t.shape = {}".format(a_t.shape))
+        eta[:,:,i] = last_eta + a_t*dt
+        last_eta[:] = eta[:,:,i]
+    
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        dk = (obsinterval - i) * dt
+        dk1 = (obsinterval - (i+1)) * dt
+        C = (gamma/dt) * beta_xx 
+        P_k = np.linalg.inv(beta_xx*dk + C*(dk1**2) + obserr_mat()) # updated precision matrix
+        #P_k = np.linalg.inv(beta_xx*dk + obserr_mat()) # updated precision matrix
+        r = Xnext - eta[:,:,i] # eta[...,:]
+        chord = (eta[...,i+1]-eta[...,i])/dt
+        P_k3 = np.dot(np.dot(obs_map(),P_k),obs_map().T)
+        psi_mdb = beta_all - P_k3 * dt
+        # lorenz model
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        a_t = np.column_stack((xdot,ydot,zdot)) 
+        mu_rb = a_t + np.dot(np.dot(P_k3,obs_map()),( y_J - np.dot(eta[...,obsinterval-1] + r + (a_t-chord)*dk,obs_map())).T).T
+        dW_t = np.random.normal(0,1,X_k.shape)
+        x_mu_rb = Xnext + mu_rb*dt
+        x_mu_em = Xnext + a_t*dt
+        Xnext[:] = x_mu_rb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
+        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,beta_all*dt) - logmvnorm_vectorised(Xnext,x_mu_rb,psi_mdb*dt)
+    rtXnext=tr2X(Xnext)
+    return rtXnext, logpqratio
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov_residual_bridge(X_k,y_J,theta):
+    """
+    THe weight that we use for this modified diffusion bridge proposal 
+    require the computation of both the proposal q and transition p densitites
+    for w_i=\frac{p(y^i_t|x^i_t}p(x^i_t|x^i_{t-1})}{q(x^i_t|x^i_{t-1})}
+    """
+    global obsinterval
+    global dt 
+    trth=theta2tr(theta)
+    trX=X2tr(X_k)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    _N_ = X_k.shape[0]
+    dim = X_k.shape[1]
+    eta=np.zeros((_N_,dim,obsinterval+1))
+    #eta[:,:,0]=trX[:,:]
+    last_eta = np.zeros_like(trX)
+    last_eta[:]=trX[:]
+    logpqratio=np.zeros(_N_)
+    #print ("X_k.shape = {}, eta.shape = {}, last_eta.shape = {}".format(X_k.shape,eta.shape,last_eta.shape))
+    # compute eta, that is the SDE without the stochastic part.
+    for i in range(obsinterval+1): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(last_eta[:,0],last_eta[:,1],last_eta[:,2],trth[0],trth[1],trth[2])
+        a_t = np.column_stack((xdot,ydot,zdot)) 
+        #print("a_t.shape = {}".format(a_t.shape))
+        eta[:,:,i] = last_eta + a_t*dt
+        last_eta[:] = eta[:,:,i]
+    
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        dk = (obsinterval - i) * dt
+        r = Xnext - eta[:,:,i] # eta[...,:]
+        chord = (eta[...,i+1]-eta[...,i])/dt
+        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
+        P_k3 = np.dot(np.dot(obs_map(),P_k),obs_map().T)
+        psi_mdb = np.eye(3) - P_k3 * dt
+        # lorenz model
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        a_t = np.column_stack((xdot,ydot,zdot)) 
+        mu_rb = a_t + np.dot(np.dot(P_k3,obs_map()),( y_J - np.dot(eta[...,obsinterval-1] + r + (a_t-chord)*dk,obs_map())).T).T
+        dW_t = np.random.normal(0,1,X_k.shape)
+        x_mu_rb = Xnext + mu_rb*dt
+        x_mu_em = Xnext + a_t*dt
+        Xnext[:] = x_mu_rb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
+        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_rb,psi_mdb*dt)
+    rtXnext=tr2X(Xnext)
+    return rtXnext, logpqratio
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov_diffusion_bridge(X_k,y_J,theta):
     """
     THe weight that we use for this modified diffusion bridge proposal 
     require the computation of both the proposal q and transition p densitites
@@ -72,59 +183,13 @@ def gopy_innov_diffusion_bridge(X_k,y_J,theta):
         logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
     rtXnext=tr2X(Xnext)
     return rtXnext, logpqratio
-        
-obsinterval = 40
-obserr = 0.1
-dt = 0.001
-@numba.jit
-def obserr_mat():
-    return np.array([[obserr**2,0],[0,obserr**2]])
-@numba.jit
-def obs_map():
-    return np.array([[1, 0],
-                    [0, 0],
-                    [0, 1]])
 
-#@numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def innov_residual_bridge(X_k,y_J,theta):
-    global obsinterval
-    #global obserr_mat
-    global dt #=0.001 # TODO make DRY
-    trth=theta2tr(theta)
-    trX=X2tr(X_k)
-    Xnext=np.zeros_like(trX)
-    Xnext[:]=trX[:]
-    Xshape0 = X_k.shape[0]
-    #print("Xnext_pre = {}".format(Xnext))
-    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
-    vk = 1**2 # Wiener random process sigma is 1 for each component.
-    for i in range(obsinterval): # TODO make this every 40th DRY
-        dk = (obsinterval - i) * dt
-        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
-        psi_mdb = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
-        #psi = vk - (vk**2 * dt)/(vk * dk + obserr**2) # TODO make this distinct for each observed y... because obs error is different per different variables
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        mu_t = np.column_stack((xdot,zdot,ydot)) # partitioned to observed and latent
-        mu_tx = np.column_stack((xdot,zdot)) # partitioned to observed and latent
-        mu_x_mdb = mu_tx + np.dot(P_k,(y_J - (Xnext[:,::2] + mu_tx * dk)).T).T
-        # The below multivariate_normal() is not supported by Numba!
-        #dW_t = np.random.multivariate_normal(0,dt*psi_mdb,Xshape0)
-        dW_t_0 = np.random.normal(0,np.sqrt(dt*psi_mdb[0,0]),Xshape0)
-        dW_t_1 = np.random.normal(0,np.sqrt(dt),Xshape0)
-        dW_t_2 = np.random.normal(0,np.sqrt(dt*psi_mdb[1,1]),Xshape0)
-        #print("mu_x_mdb = {}".format(mu_x_mdb))
-        #print("mu_x_mdb.shape = {}".format(mu_x_mdb.shape))
-        Xnext[:,0]=Xnext[:,0]+(mu_x_mdb[:,0]*dt) + dW_t_0 #dW_t[:,0]
-        Xnext[:,1]=Xnext[:,1]+(mu_t[:,2]*dt) + dW_t_1 # dW_t[:,2] # latent
-        Xnext[:,2]=Xnext[:,2]+(mu_x_mdb[:,1]*dt) + dW_t_2 # dW_t[:,1]
-        #print("Xnext = {}".format(Xnext))
-        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
-        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
-    rtXnext=tr2X(Xnext)
-    return rtXnext
+@numba.jit("f8[:,:](f8[:,:],f8[:,:])")
+def doubledot(outer,inner):
+    return np.dot(np.dot(outer,inner),outer.T)
 
-#@numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def innov_diffusion_bridge(X_k,y_J,theta):
+@numba.jit #("float64[:][:](float64[:][:],float64[:])")
+def innov_lindstrom_bridge(X_k,y_J,theta):
     """
     THe weight that we use for this modified diffusion bridge proposal 
     require the computation of both the proposal q and transition p densitites
@@ -138,12 +203,17 @@ def innov_diffusion_bridge(X_k,y_J,theta):
     Xnext[:]=trX[:]
     Xshape0 = X_k.shape[0]
     logpqratio=np.zeros(Xshape0)
+    beta_all = np.eye(3) # process noise on all variables
+    beta_xx = np.eye(2) # process noise on observed variables TODO make F'beta F
+    gamma = 0.5
     for i in range(obsinterval): # TODO make this every 40th DRY
         dk = (obsinterval - i) * dt
-        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
-        P_k3 = np.dot(np.dot(obs_map(),P_k),obs_map().T)
+        dk1 = (obsinterval - (i+1)) * dt
+        C = (gamma/dt) * beta_xx 
+        P_k = np.linalg.inv(beta_xx*dk + C*(dk1**2) + obserr_mat()) # updated precision matrix
+        P_k3 = doubledot(obs_map(),P_k) #np.dot(np.dot(obs_map(),P_k),obs_map().T)
         #psi_mdb_old = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
-        psi_mdb = np.eye(3) - P_k3 * dt
+        psi_mdb = beta_all - P_k3 * dt
         # lorenz model
         (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
         a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
@@ -152,7 +222,7 @@ def innov_diffusion_bridge(X_k,y_J,theta):
         x_mu_mdb = Xnext + mu_mdb*dt
         x_mu_em = Xnext + a_t*dt
         Xnext[:] = x_mu_mdb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
-        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
+        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,beta_all*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
     rtXnext=tr2X(Xnext)
     return rtXnext, logpqratio
 
@@ -349,7 +419,7 @@ if __name__ == '__main__':
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 3200 #12800 #3200 #12800 # 1600
+    num_steps = 12800 #12800 #3200 #12800 # 1600
     X0_ = np.array([0,1,1.05])
     X0_ = X0_[np.newaxis,:]
     #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -371,11 +441,14 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=1024 #8192 #1024 #16384 #2048 #512
+        n=4096 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
-        sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_lindstrom_bridge,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_residual_bridge,lh,Y,3,3,n)
+        sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov,lh,Y,3,3,n)
 
     if actionflag == 't':
