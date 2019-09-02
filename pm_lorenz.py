@@ -34,7 +34,6 @@ def lorenz(x, y, z, s=10, r=28, b=2.667):
     z_dot = x*y - b*z 
     return x_dot, y_dot, z_dot
 
-        
 obsinterval = 40
 obserr = 0.1
 dt = 0.001
@@ -71,7 +70,7 @@ def innov_lindstrom_residual_bridge(X_k,y_J,theta):
     logpqratio=np.zeros(_N_)
     beta_all = np.eye(3) # process noise on all variables
     beta_xx = np.eye(2) # process noise on observed variables TODO make F'beta F
-    gamma = 0.25
+    gamma = 0.1
     #print ("X_k.shape = {}, eta.shape = {}, last_eta.shape = {}".format(X_k.shape,eta.shape,last_eta.shape))
     # compute eta, that is the SDE without the stochastic part.
     for i in range(obsinterval+1): # TODO make this every 40th DRY
@@ -246,6 +245,21 @@ def logmvnorm_vectorised(X,mu,cov):
 #    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * dd
 
     
+@numba.jit
+def propagate_noisefree(X,y_J,theta):
+    global obsinterval
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        Xnext[:,0]=Xnext[:,0]+(xdot*dt) 
+        Xnext[:,1]=Xnext[:,1]+(ydot*dt)
+        Xnext[:,2]=Xnext[:,2]+(zdot*dt)
+    rtXnext=tr2X(Xnext)
+    return rtXnext, np.zeros(X.shape[0])
 
 @numba.jit #("float64[:][:](float64[:][:],float64[:])")
 def innov(X,y_J,theta):
@@ -419,7 +433,7 @@ if __name__ == '__main__':
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 12800 #12800 #3200 #12800 # 1600
+    num_steps = 3200 #12800 #12800 #3200 #12800 # 1600
     X0_ = np.array([0,1,1.05])
     X0_ = X0_[np.newaxis,:]
     #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -441,15 +455,20 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=4096 #8192 #1024 #16384 #2048 #512
+        n=2048 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
+        #sampler = pmpfl(innov_lindstrom_bridge,innov_lindstrom_bridge,lh,Y,3,3,n)
+        #sampler = pmpfl(innov,innov_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_residual_bridge,lh,Y,3,3,n)
-        sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_residual_bridge,propagate_noisefree,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
+        sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
+        #sampler = pmpfl(innov,innov_lindstrom_residual_bridge,lh,Y,3,3,n)
+        #sampler = pmpfl(innov,innov,lh,Y,3,3,n)
 
     if actionflag == 't':
         plot_synthetic(X,Y)
