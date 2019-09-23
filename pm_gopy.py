@@ -18,61 +18,6 @@ class lorenz_63_ssm(object):
     def synthetic(self):
         print("Dummy")
 
-
-@jit #("UniTuple(float64[:],3)(float64[:],float64[:],float64[:],float64,float64,float64)")
-def lorenz(x, y, z, s=10, r=19., b=2.667):
-    '''
-    Given:
-       x, y, z: a point of interest in three dimensional space
-       s, r, b: parameters defining the lorenz attractor
-    Returns:
-       x_dot, y_dot, z_dot: values of the lorenz attractor's partial
-           derivatives at the point x, y, z
-    '''
-    x_dot = s*(y - x) 
-    y_dot = r*x - y - x*z 
-    z_dot = x*y - b*z 
-    return x_dot, y_dot, z_dot
-
-@numba.jit
-def gopy(x,y,sigma=1.5,omega=0.5*(math.sqrt(5)-1)):
-    x_dot = 2. * sigma * np.tanh(x) * np.cos(2.*math.pi*y)
-    y_dot = y + np.mod(omega,1.)
-    return (x_dot,y_dot)
-
-#@numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def gopy_innov_diffusion_bridge(X_k,y_J,theta):
-    """
-    THe weight that we use for this modified diffusion bridge proposal 
-    require the computation of both the proposal q and transition p densitites
-    for w_i=\frac{p(y^i_t|x^i_t}p(x^i_t|x^i_{t-1})}{q(x^i_t|x^i_{t-1})}
-    """
-    global obsinterval
-    global dt 
-    trth=theta2tr(theta)
-    trX=X2tr(X_k)
-    Xnext=np.zeros_like(trX)
-    Xnext[:]=trX[:]
-    Xshape0 = X_k.shape[0]
-    logpqratio=np.zeros(Xshape0)
-    for i in range(obsinterval): # TODO make this every 40th DRY
-        dk = (obsinterval - i) * dt
-        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
-        P_k3 = np.dot(np.dot(obs_map(),P_k),obs_map().T)
-        #psi_mdb_old = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
-        psi_mdb = np.eye(3) - P_k3 * dt
-        # lorenz model
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
-        mu_mdb = a_t + np.dot(np.dot(P_k3,obs_map()),( y_J - np.dot(Xnext + a_t*dk,obs_map())).T).T
-        dW_t = np.random.normal(0,1,X_k.shape)
-        x_mu_mdb = Xnext + mu_mdb*dt
-        x_mu_em = Xnext + a_t*dt
-        Xnext[:] = x_mu_mdb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
-        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
-    rtXnext=tr2X(Xnext)
-    return rtXnext, logpqratio
-        
 obsinterval = 40
 obserr = 0.1
 dt = 0.001
@@ -82,46 +27,15 @@ def obserr_mat():
 @numba.jit
 def obs_map():
     return np.array([[1, 0],
-                    [0, 0],
                     [0, 1]])
 
-#@numba.jit #("float64[:][:](float64[:][:],float64[:])")
-def innov_residual_bridge(X_k,y_J,theta):
-    global obsinterval
-    #global obserr_mat
-    global dt #=0.001 # TODO make DRY
-    trth=theta2tr(theta)
-    trX=X2tr(X_k)
-    Xnext=np.zeros_like(trX)
-    Xnext[:]=trX[:]
-    Xshape0 = X_k.shape[0]
-    #print("Xnext_pre = {}".format(Xnext))
-    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
-    vk = 1**2 # Wiener random process sigma is 1 for each component.
-    for i in range(obsinterval): # TODO make this every 40th DRY
-        dk = (obsinterval - i) * dt
-        P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
-        psi_mdb = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
-        #psi = vk - (vk**2 * dt)/(vk * dk + obserr**2) # TODO make this distinct for each observed y... because obs error is different per different variables
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        mu_t = np.column_stack((xdot,zdot,ydot)) # partitioned to observed and latent
-        mu_tx = np.column_stack((xdot,zdot)) # partitioned to observed and latent
-        mu_x_mdb = mu_tx + np.dot(P_k,(y_J - (Xnext[:,::2] + mu_tx * dk)).T).T
-        # The below multivariate_normal() is not supported by Numba!
-        #dW_t = np.random.multivariate_normal(0,dt*psi_mdb,Xshape0)
-        dW_t_0 = np.random.normal(0,np.sqrt(dt*psi_mdb[0,0]),Xshape0)
-        dW_t_1 = np.random.normal(0,np.sqrt(dt),Xshape0)
-        dW_t_2 = np.random.normal(0,np.sqrt(dt*psi_mdb[1,1]),Xshape0)
-        #print("mu_x_mdb = {}".format(mu_x_mdb))
-        #print("mu_x_mdb.shape = {}".format(mu_x_mdb.shape))
-        Xnext[:,0]=Xnext[:,0]+(mu_x_mdb[:,0]*dt) + dW_t_0 #dW_t[:,0]
-        Xnext[:,1]=Xnext[:,1]+(mu_t[:,2]*dt) + dW_t_1 # dW_t[:,2] # latent
-        Xnext[:,2]=Xnext[:,2]+(mu_x_mdb[:,1]*dt) + dW_t_2 # dW_t[:,1]
-        #print("Xnext = {}".format(Xnext))
-        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
-        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
-    rtXnext=tr2X(Xnext)
-    return rtXnext
+
+
+@numba.jit
+def gopy(x,y,sigma=1.5,omega=0.5*(math.sqrt(5)-1)):
+    x_dot = 2. * sigma * np.tanh(x) * np.cos(2.*math.pi*y)
+    y_dot = np.mod(y + omega,1.)
+    return (x_dot,y_dot)
 
 #@numba.jit #("float64[:][:](float64[:][:],float64[:])")
 def innov_diffusion_bridge(X_k,y_J,theta):
@@ -142,22 +56,19 @@ def innov_diffusion_bridge(X_k,y_J,theta):
         dk = (obsinterval - i) * dt
         P_k = np.linalg.inv(np.eye(2)*dk + obserr_mat()) # updated precision matrix
         P_k3 = np.dot(np.dot(obs_map(),P_k),obs_map().T)
-        #psi_mdb_old = np.eye(3) - np.column_stack((np.vstack((P_k,np.zeros((1,2)))),np.zeros(3))) * dt
-        psi_mdb = np.eye(3) - P_k3 * dt
+        psi_mdb = np.eye(2) - P_k3 * dt
         # lorenz model
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        (xdot,ydot) = gopy(Xnext[:,0],Xnext[:,1],trth[0],trth[1])
+        a_t = np.column_stack((xdot,ydot)) # partitioned to observed and latent
         mu_mdb = a_t + np.dot(np.dot(P_k3,obs_map()),( y_J - np.dot(Xnext + a_t*dk,obs_map())).T).T
         dW_t = np.random.normal(0,1,X_k.shape)
         x_mu_mdb = Xnext + mu_mdb*dt
         x_mu_em = Xnext + a_t*dt
         Xnext[:] = x_mu_mdb + np.dot(np.sqrt(dt*psi_mdb),dW_t.T).T
-        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(3)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
-        #print("logpqratio={}".format(logpqratio[:10]))
-    #print("FINAL logpqratio={}".format(logpqratio[:10]))
+        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,np.eye(2)*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
     rtXnext=tr2X(Xnext)
     return rtXnext, logpqratio
-
+        
 #@numba.jit("float64[:](float64[:],float64[:],float64[:][:])")
 #def logmvnorm_vectorised(X,mu,cov):
 #    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.dot(np.dot((X - mu).T,np.linalg.inv(cov)),(X-mu))
@@ -166,18 +77,6 @@ def innov_diffusion_bridge(X_k,y_J,theta):
 def logmvnorm_vectorised(X,mu,cov):
     return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
 
-#    """
-#    TODO assert last dimension of X is same as cov
-#         if dim of X is 1, do X.T cov^-1 X
-#         else                 X cov^-1 X.T
-#    """
-#    if len(X.shape) > 1:
-#        dd = np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
-#    else:
-#        dd = np.dot(np.dot((X - mu).T,np.linalg.inv(cov)),(X-mu))
-#    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * dd
-
-    
 
 @numba.jit #("float64[:][:](float64[:][:],float64[:])")
 def innov(X,y_J,theta):
@@ -187,36 +86,24 @@ def innov(X,y_J,theta):
     trX=X2tr(X)
     Xnext=np.zeros_like(trX)
     Xnext[:]=trX[:]
-    #print("Xnext_pre = {}".format(Xnext))
-    #print("Xnext_pre std dev = {}".format(np.std(Xnext,axis=0)))
     for i in range(obsinterval): # TODO make this every 40th DRY
-        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        (xdot,ydot) = gopy(Xnext[:,0],Xnext[:,1],trth[0],trth[1])
         Xnext[:,0]=Xnext[:,0]+(xdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
         Xnext[:,1]=Xnext[:,1]+(ydot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
-        Xnext[:,2]=Xnext[:,2]+(zdot*dt) + np.random.normal(0,np.sqrt(dt),X.shape[0])
-        #print("Xnext = {}".format(Xnext))
-        #print("Xnext mean = {}".format(np.mean(Xnext,axis=0)))
-        #print("Xnext std dev = {}".format(np.std(Xnext,axis=0)))
     rtXnext=tr2X(Xnext)
     return rtXnext, np.zeros(X.shape[0])
 
 
 @numba.jit("float64[:](float64[:])")
 def theta2tr(theta):
-    #return np.array([10,19.,2.667])
-    target = np.array([10.,19.,2.667])
-    #target = np.array([20.,40.,10.])
+    target = np.array([1.5,0.5*(math.sqrt(5.)-1.)])
     lower = target * 0.2
     upper = target + (target - lower)
-    #uniform
     return theta*(upper-lower) + lower
-    #Normal
-    #return np.power(1.4,theta*2) + np.array([10,19.,2.667]) - 1.
-    #return theta + np.array([10,19.,2.667])
 
+@numba.jit("float64[:](float64[:])")
 def tr2theta(nt):
-    #target = np.array([20.,40.,10.])
-    target = np.array([10.,19.,2.667])
+    target = np.array([1.5,0.5*(math.sqrt(5.)-1.)])
     lower = target * 0.2
     upper = target + (target - lower)
     return (nt - lower)/(upper-lower)
@@ -224,11 +111,11 @@ def tr2theta(nt):
 
 @numba.jit #("float64[:][:](float64[:][:])")
 def X2tr(X):
-    return np.column_stack((X[:,0]*20.0,X[:,1]*20.0,X[:,2]*5.+0.8))
+    return np.column_stack((X[:,0]*5.,X[:,1]+0.5))
 
 @numba.jit #("float64[:][:](float64[:][:])")
 def tr2X(tr):
-    return np.column_stack((tr[:,0]/20.0,tr[:,1]/20.0,(tr[:,2]-0.8)/5.))
+    return np.column_stack((tr[:,0]/5.0,tr[:,1]-0.5))
 
 @numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
 def xTPx(x,P):
@@ -261,22 +148,21 @@ def lh(X,y,theta,cov=np.array([[obserr**2,0],[0,obserr**2]])):
 
 
 
-def synthetic(dt=0.001,num_steps=10000,x0=0.,y0=1.,z0=1.05,xW=1.,yW=1.,zW=1.,xO=1.,yO=1.,zO=1.):
+def synthetic(dt=0.001,num_steps=10000,x0=0.,y0=1.,xW=1.,yW=1.,xO=1.,yO=1.):
     global obsinterval
     # Need one more for the initial values
-    Xs = np.empty((num_steps + 1,3))
+    Xs = np.empty((num_steps + 1,2))
     Ys = np.empty((num_steps + 1,2))
     
     # Set initial values
-    Xs[0,0], Xs[0,1], Xs[0,2] = (x0,y0,z0)
+    Xs[0,0], Xs[0,1] = (x0,y0)
     
     # Step through "time", calculating the partial derivatives at the current point
     # and using them to estimate the next point
     for i in range(num_steps):
-        x_dot, y_dot, z_dot = lorenz(Xs[i,0], Xs[i,1], Xs[i,2])
+        x_dot, y_dot = gopy(Xs[i,0], Xs[i,1])
         Xs[i + 1,0] = Xs[i,0] + (x_dot * dt)+ xW*np.random.normal(0,np.sqrt(dt)) 
         Xs[i + 1,1] = Xs[i,1] + (y_dot * dt)+ yW*np.random.normal(0,np.sqrt(dt))
-        Xs[i + 1,2] = Xs[i,2] + (z_dot * dt)+ zW*np.random.normal(0,np.sqrt(dt))
     Ys = obseqn_with_noise(Xs[::obsinterval],np.array([[obserr**2,0],[0,obserr**2]]))
     return (Xs,Ys)
 
@@ -285,8 +171,7 @@ def plot_synthetic(Xs,Ys):
     #ax.plot(Xs[:,0],'r',Xs[:,1],'g',Xs[:,2],'b',lw=1)
     ax.plot(Xs[:,0],'r',label="x",lw=1)
     ax.plot(Xs[:,1],'g',label="y",lw=1)
-    ax.plot(Xs[:,2],'b',label="z",lw=1)
-    ax.plot(np.arange(0,num_steps+1,obsinterval),Ys[:,0],'r+',np.arange(0,num_steps+1,obsinterval),Ys[:,1],'b+',label="Observed",lw=1)
+    ax.plot(np.arange(0,num_steps+1,obsinterval),Ys[:,0],'r+',np.arange(0,num_steps+1,obsinterval),Ys[:,1],'g+',label="Observed",lw=1)
     ax.legend()
     plt.show()
     fig = plt.figure()
@@ -294,12 +179,11 @@ def plot_synthetic(Xs,Ys):
     ax1.plot(Ys[:,0],Ys[:,1],linewidth=0.5)
     ax1.set_title("Observed Data")
     ax1.set_xlabel("X Axis")
-    ax1.set_ylabel("Z Axis")
-    ax2 = fig.add_subplot(1, 2, 2, projection='3d')
-    ax2.plot(Xs[:,0], Xs[:,1], Xs[:,2], lw=0.5)
+    ax1.set_ylabel("Y Axis")
+    ax2 = fig.add_subplot(1, 2, 2)
+    ax2.plot(Xs[:,0], Xs[:,1], lw=0.5)
     ax2.set_xlabel("X Axis")
     ax2.set_ylabel("Y Axis")
-    ax2.set_zlabel("Z Axis")
     ax2.set_title("State")
     plt.show()
 
@@ -307,8 +191,8 @@ def plot_synthetic(Xs,Ys):
 def obseqn(Xs): #,sigma=np.array([obserr,obserr])):
     dim = Xs.shape[0]
     Ys = np.zeros((dim,2))
-    Ys[:,0] = Xs[:,0] #+ np.random.normal(0,np.sqrt(sigma[0]),dim)
-    Ys[:,1] = Xs[:,2] #+ np.random.normal(0,np.sqrt(sigma[1]),dim)
+    Ys[:,0] = Xs[:,0]
+    Ys[:,1] = Xs[:,1]
     return Ys
 
 def obseqn_with_noise(Xs,cov=np.array([[obserr**2,0],[0,obserr**2]])):
@@ -318,7 +202,7 @@ def obseqn_with_noise(Xs,cov=np.array([[obserr**2,0],[0,obserr**2]])):
 
 def plot_traces(chain_length,estparams,ml):
     tS=np.ones(chain_length)*10
-    tR=np.ones(chain_length)*19.
+    tR=np.ones(chain_length)*28
     tB=np.ones(chain_length)*2.667
     
     print("Estimated Parameters {}".format(estparams))
@@ -373,12 +257,12 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=4096 #8192 #1024 #16384 #2048 #512
+        n=1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
-        #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
-        sampler = pmpfl(innov,lh,Y,3,3,n)
+        sampler = pmpfl(innov_diffusion_bridge,lh,Y,2,2,n)
+        #sampler = pmpfl(innov,lh,Y,2,2,n)
 
     if actionflag == 't':
         plot_synthetic(X,Y)
@@ -392,8 +276,8 @@ if __name__ == '__main__':
         #testX[0,:] = X0_
         log_lh = np.zeros(T)
         for i in range(0,T):
-           #testX[i,:] = X2tr(innov(tr2X(testX[i,:]),np.array([10.,19.,2.667])))
-           log_lh[i] = lh(tr2X(X[np.newaxis,i*obsinterval,:]),Y[np.newaxis,i,:],np.zeros(3)) # last arg theta unused
+           #testX[i,:] = X2tr(innov(tr2X(testX[i,:]),np.array([10.,28.,2.667])))
+           log_lh[i] = lh(tr2X(X[np.newaxis,i*obsinterval,:]),Y[np.newaxis,i,:],np.zeros(2)) # last arg theta unused
            #print("log lh at i={} is {}".format(i,log_lh[i]))
            print("i={}, loglh = {}, X[i,:]={}, Y[i,:]={}".format(i,log_lh[i],tr2X(X[np.newaxis,i*obsinterval,:]),Y[i,:]))
 
@@ -404,7 +288,7 @@ if __name__ == '__main__':
         #fig = plt.figure()
         #plt.plot(testX[:,:,0])
         #plt.show()
-        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(np.array([10.,19.,2.667])))
+        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(np.array([1.5,0.5*(math.sqrt(5.)-1)])))
     
         print("Log Marginal likelihood: Mean = {} Std Dev = {}".format(ml_test.mean(),ml_test.std()))
     
@@ -420,15 +304,15 @@ if __name__ == '__main__':
         #           [-2.23494164e-06, -6.18656485e-06,  7.64138236e-06]])
         burnin = 200
         initial_run = 400
-        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,19.,2.667]))) #,pcov0=pcov_in)
-        pcov_in = np.eye(3) * 0.0000001
+        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.]),tr2theta(np.array([1.5,0.5*(math.sqrt(5.)-1)]))) #,pcov0=pcov_in)
+        pcov_in = np.eye(2) * 0.0000001
         thetamean = np.mean(esttheta[burnin:,:],axis=0)
         covnorm = 1./(initial_run-burnin-1)
         for k in range(burnin,initial_run):
             pcov_in += np.outer(esttheta[k,:]-thetamean,esttheta[k,:]-thetamean)*covnorm
         print("P Covariance for second run = {}".format(pcov_in))
 
-        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,19.,2.667])),pcov0=pcov_in)
+        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.]),tr2theta(np.array([1.5,0.5*(math.sqrt(5.)-1)])),pcov0=pcov_in)
         print("Acceptance rate = {}".format(1.*ar.sum()/chain_length))
     
         for i in range(estparams.shape[0]):

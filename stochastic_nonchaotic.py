@@ -4,23 +4,24 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
 
-def lorenz(x, y, z, s=10, r=28, b=2.667):
+def de(x, y, z, s=29., r=7., b=3.):
     '''
     Given:
        x, y, z: a point of interest in three dimensional space
-       s, r, b: parameters defining the lorenz attractor
+       s, r, b: parameters defining the system
     Returns:
-       x_dot, y_dot, z_dot: values of the lorenz attractor's partial
+       x_dot, y_dot, z_dot: values of the attractor's partial
            derivatives at the point x, y, z
     '''
-    x_dot = s*(y - x) 
-    y_dot = r*x - y - x*z 
-    z_dot = x*y - b*z 
+    x_dot = 10.*(y-x)
+    y_dot = 15.*x - x*z - y
+    z_dot = x*y - (8./3.)*z
+    
     return x_dot, y_dot, z_dot
 
 
 
-def synthetic(dt=0.01,num_steps=10000,x0=0.,y0=1.,z0=1.05,xW=1.,yW=1.,zW=1.,xO=1.,yO=1.,zO=1.):
+def synthetic(dt=0.01,num_steps=10000,x0=10.,y0=10.,z0=10.,xW=1.,yW=1.,zW=1.,xO=1.,yO=1.,zO=1.):
     # Need one more for the initial values
     xs = np.empty(num_steps + 1)
     ys = np.empty(num_steps + 1)
@@ -32,16 +33,17 @@ def synthetic(dt=0.01,num_steps=10000,x0=0.,y0=1.,z0=1.05,xW=1.,yW=1.,zW=1.,xO=1
     # Step through "time", calculating the partial derivatives at the current point
     # and using them to estimate the next point
     for i in range(num_steps):
-        x_dot, y_dot, z_dot = lorenz(xs[i], ys[i], zs[i])
+        x_dot, y_dot, z_dot = de(xs[i], ys[i], zs[i])
         xs[i + 1] = xs[i] + (x_dot * dt) + xW*np.random.normal(0,np.sqrt(dt)) #+ np.random.normal(0,xO)
         ys[i + 1] = ys[i] + (y_dot * dt) + yW*np.random.normal(0,np.sqrt(dt)) #+ np.random.normal(0,yO)
         zs[i + 1] = zs[i] + (z_dot * dt) + zW*np.random.normal(0,np.sqrt(dt)) #+ np.random.normal(0,zO)
     return (xs,ys,zs)
 
 if __name__ == '__main__':    
-    dt = 0.001
+    dt = 0.01
     num_steps = 100000
-    (xs,ys,zs) = synthetic(dt,num_steps,xW=1.,yW=1.,zW=1.)
+    (xs,ys,zs) = synthetic(dt,num_steps,xW=0.,yW=0.,zW=0.)
+    print("xs={},ys={},zs={}".format(xs,ys,zs))
     
     # Plot
     fig = plt.figure()
@@ -51,7 +53,7 @@ if __name__ == '__main__':
     ax.set_xlabel("X Axis")
     ax.set_ylabel("Y Axis")
     ax.set_zlabel("Z Axis")
-    ax.set_title("Lorenz Attractor")
+    ax.set_title("System")
     
     plt.show()
     

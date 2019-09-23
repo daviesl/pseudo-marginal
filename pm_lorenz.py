@@ -3,10 +3,13 @@ import math
 import time
 import numba
 from numba import jit, float64
-from pmmcmc import pmpfl
+from pmmcmc import pmpfl, logsumexp
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 import sys
+
+theta0 = np.array([10.,28.,2.667])
+#theta0 = np.array([10.,10,2.667])
 
 class lorenz_63_ssm(object):
     def __init__(self,dt=0.01,num_steps=10000,Xsigma=1.,Ysigma=1.,X0=np.array([0,1,1.05])):
@@ -20,7 +23,7 @@ class lorenz_63_ssm(object):
 
 
 @jit #("UniTuple(float64[:],3)(float64[:],float64[:],float64[:],float64,float64,float64)")
-def lorenz(x, y, z, s=10, r=28, b=2.667):
+def lorenz(x, y, z, s=theta0[0], r=theta0[1], b=theta0[2]):
     '''
     Given:
        x, y, z: a point of interest in three dimensional space
@@ -244,23 +247,100 @@ def logmvnorm_vectorised(X,mu,cov):
 #        dd = np.dot(np.dot((X - mu).T,np.linalg.inv(cov)),(X-mu))
 #    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * dd
 
-    
+
+#TODO compute probability of path (same for all I guess)    
 @numba.jit
-def propagate_noisefree(X,y_J,theta):
+def propagate_noisefree_target_idx(X,y_J,theta,target_idx = None):
     global obsinterval
     global dt #=0.001 # TODO make DRY
     trth=theta2tr(theta)
     trX=X2tr(X)
     Xnext=np.zeros_like(trX)
+    #logpqratio_K=np.zeros((X.shape[0],obsinterval))
+    logpqratio=np.zeros(X.shape[0])
+    beta_all = np.eye(3) # process noise on all variables
     Xnext[:]=trX[:]
     for i in range(obsinterval): # TODO make this every 40th DRY
         (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
-        Xnext[:,0]=Xnext[:,0]+(xdot*dt) 
-        Xnext[:,1]=Xnext[:,1]+(ydot*dt)
-        Xnext[:,2]=Xnext[:,2]+(zdot*dt)
-    rtXnext=tr2X(Xnext)
-    return rtXnext, np.zeros(X.shape[0])
 
+        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        #Xnext[:,0]=Xnext[:,0]+(xdot*dt) 
+        #Xnext[:,1]=Xnext[:,1]+(ydot*dt)
+        #Xnext[:,2]=Xnext[:,2]+(zdot*dt)
+        Xnext = Xnext + a_t*dt
+        if target_idx is not None:
+            x_mu_indnf = Xnext[target_idx]
+            logpqratio[:] = np.maximum(logpqratio,logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt))
+            #logpqratio[:] += logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) - logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
+    rtXnext=tr2X(Xnext)
+    if target_idx is not None:
+        rtXnext = rtXnext[target_idx]
+    return rtXnext, logpqratio #np.zeros(X.shape[0])
+
+#TODO compute probability of path (same for all I guess)    
+#@numba.jit
+def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
+    global obsinterval
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X)
+    Xnext=np.zeros_like(trX)
+    #logpqratio_K=np.zeros((X.shape[0],obsinterval))
+    n = X.shape[0]
+    logpqratio=np.zeros(n) # This can't be zero because that's maximum already.
+    beta_all = np.eye(3) # process noise on all variables
+    Xnext[:]=trX[:]
+    if llhnorm_t is not None:
+        # sort with indices
+        # Each particle can try to target a better likelihood.
+        # Want to create a list of target indices such that 
+        #  1) High chance of having better lh to transition probability ratio
+        #     than its current lh.
+        # What is a good cheap heuristic to maximise this chance?
+        # Idea 1) Compute 1-step-up transitions. 
+        #      2) Look for high transition probabilities (ratio to lh increase)
+        #      3) Compute transitions to max lh
+        # Math idea: find a sufficient condition to determine the existence of a better importance distribution before trying to find it.
+        idx_llh_t = np.argsort(llhnorm_t)[::-1] #,kind='stable')
+        # re-index X to sorted
+        Xnext = Xnext[idx_llh_t,...]
+        sllhnorm_t = llhnorm_t[idx_llh_t]
+        #target_success_idx = np.arange(n, dtype=np.int32)
+        target_success_idx = np.zeros(n, dtype=np.int64)
+        target_success_idx[:] = np.arange(n)
+        # reverse indices
+        ridx_llh_t = np.zeros(n, dtype=np.int64)
+        ridx_llh_t[idx_llh_t] = target_success_idx # find way to do this in one line
+        # come up with some good candidate targets.
+        target_idx = np.zeros(n, dtype=np.int64)
+        #target_idx[:] = np.clip(np.arange(n, dtype=np.int32) -1,0,n-1)
+        target_idx[1:] = np.arange(n-1)
+        #print("target idx = {}".format(target_idx))
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+
+        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        Xnext = Xnext + a_t*dt
+        if llhnorm_t is not None:
+            x_mu_indnf = Xnext[target_idx]
+            proposed_pq = logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) -  logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
+            #print("Target success idx = {}".format(np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx], True, False)))
+            #target_success_idx[:] = np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx], target_idx, target_success_idx) 
+            success_idx = np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx],True,False) 
+            target_success_idx[success_idx] = target_idx[success_idx]
+            logpqratio[success_idx] = proposed_pq[success_idx]
+            #logpqratio[:] = np.maximum(proposed_pq,logpqratio)
+            #logpqratio[:] += logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) - logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
+            #print("success idx = {}".format(success_idx))
+            #print("target success idx = {}".format(target_success_idx))
+            #print("logpqratio = {}".format(logpqratio))
+    rtXnext=tr2X(Xnext)
+    if llhnorm_t is not None:
+        ridx_llh_t[idx_llh_t] = target_success_idx # find way to do this in one line
+        rtXnext = rtXnext[ridx_llh_t]
+    return rtXnext, logpqratio #np.zeros(X.shape[0])
+
+#TODO return p and q separately
 @numba.jit #("float64[:][:](float64[:][:],float64[:])")
 def innov(X,y_J,theta):
     global obsinterval
@@ -286,7 +366,8 @@ def innov(X,y_J,theta):
 @numba.jit("float64[:](float64[:])")
 def theta2tr(theta):
     #return np.array([10,28,2.667])
-    target = np.array([10.,28.,2.667])
+    global theta0
+    target = theta0 #np.array([10.,28.,2.667])
     #target = np.array([20.,40.,10.])
     lower = target * 0.2
     upper = target + (target - lower)
@@ -298,7 +379,8 @@ def theta2tr(theta):
 
 def tr2theta(nt):
     #target = np.array([20.,40.,10.])
-    target = np.array([10.,28.,2.667])
+    global theta0
+    target = theta0 #np.array([10.,28.,2.667])
     lower = target * 0.2
     upper = target + (target - lower)
     return (nt - lower)/(upper-lower)
@@ -399,9 +481,10 @@ def obseqn_with_noise(Xs,cov=np.array([[obserr**2,0],[0,obserr**2]])):
     return Ys
 
 def plot_traces(chain_length,estparams,ml):
-    tS=np.ones(chain_length)*10
-    tR=np.ones(chain_length)*28
-    tB=np.ones(chain_length)*2.667
+    global theta0
+    tS=np.ones(chain_length)*theta0[0]
+    tR=np.ones(chain_length)*theta0[1]
+    tB=np.ones(chain_length)*theta0[2]
     
     print("Estimated Parameters {}".format(estparams))
     print("Marginal likelihoods {}".format(ml))
@@ -433,7 +516,7 @@ if __name__ == '__main__':
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 3200 #12800 #12800 #3200 #12800 # 1600
+    num_steps = 6400 #3200 #12800 #12800 #3200 #12800 # 1600
     X0_ = np.array([0,1,1.05])
     X0_ = X0_[np.newaxis,:]
     #X0_mu = tr2X(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -463,7 +546,7 @@ if __name__ == '__main__':
         #sampler = pmpfl(innov,innov_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_residual_bridge,propagate_noisefree,lh,Y,3,3,n)
+        #sampler = pmpfl(innov_lindstrom_bridge,propagate_noisefree,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
         sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
         #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
@@ -494,9 +577,13 @@ if __name__ == '__main__':
         #fig = plt.figure()
         #plt.plot(testX[:,:,0])
         #plt.show()
-        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(np.array([10.,28.,2.667])))
-    
+        ml_test = sampler.test_particlefilter(chain_length,X0_mu[0,:],tr2theta(theta0))
+        ml_test_log_mean = logsumexp(ml_test) - math.log(chain_length)
+        ml_test_log_var = 2. * ml_test_log_mean + np.log(np.sum((np.exp(ml_test-ml_test_log_mean)-1)**2)) - math.log(chain_length)
+        
+        
         print("Log Marginal likelihood: Mean = {} Std Dev = {}".format(ml_test.mean(),ml_test.std()))
+        print("Log Non-log: Mean = {} Std Dev = {}".format(ml_test_log_mean,ml_test_log_var * 0.5))
     
         fig,(ax1,ax2) = plt.subplots(1,2)
         ax1.plot(ml_test,'y',linewidth=1)
@@ -510,7 +597,7 @@ if __name__ == '__main__':
         #           [-2.23494164e-06, -6.18656485e-06,  7.64138236e-06]])
         burnin = 200
         initial_run = 400
-        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,28.,2.667]))) #,pcov0=pcov_in)
+        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(theta0)) #,pcov0=pcov_in)
         pcov_in = np.eye(3) * 0.0000001
         thetamean = np.mean(esttheta[burnin:,:],axis=0)
         covnorm = 1./(initial_run-burnin-1)
@@ -518,7 +605,7 @@ if __name__ == '__main__':
             pcov_in += np.outer(esttheta[k,:]-thetamean,esttheta[k,:]-thetamean)*covnorm
         print("P Covariance for second run = {}".format(pcov_in))
 
-        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(np.array([10.,28.,2.667])),pcov0=pcov_in)
+        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),tr2theta(theta0),pcov0=pcov_in)
         print("Acceptance rate = {}".format(1.*ar.sum()/chain_length))
     
         for i in range(estparams.shape[0]):

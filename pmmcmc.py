@@ -11,6 +11,14 @@ def logsumexp(ns):
     sumOfExp = np.exp(ds).sum()
     return m + np.log(sumOfExp)
 
+@numba.jit
+def logsumexp_pair(ns1,ns2):
+    m = np.maximum(ns1,ns2)
+    ds1 = ns1 - m
+    ds2 = ns2 - m
+    sumOfExp = np.exp(ds1) + np.exp(ds2)
+    return m + np.log(sumOfExp)
+
 #@numba.jit
 def logsumexp_mat(ns,axis=0):
     m = np.max(ns,axis=axis)
@@ -182,8 +190,47 @@ class pmpfl(object):
             return cls.meanauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
         elif False:
             return cls.improvedauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
-        elif True:
+        elif False:
             return cls.essauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+        elif False:
+            return cls.fullessauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+        elif False:
+            return cls.alphaauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+        elif False:
+            return cls.garbageauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+        elif True:
+            return cls.onkauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+
+    @staticmethod
+    #@numba.jit
+    def onkauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        # resample multinomially for u weights
+        #log_u_1=np.log(wi_1) + loglh_nf + lpqr
+        log_u_1=loglh_nf + lpqr
+        u_1_norm=np.exp(log_u_1-logsumexp(log_u_1))
+        #Xi_bar_indices = resample(u_1_norm,n) # todo change to multinomial
+        #Xi_bar_indices = np.full(n,np.argmax(u_1_norm),dtype=np.int32)
+        #Xi_bar_star, lpqr_star  = propnf(Xi_1,yi,theta,Xi_bar_indices)
+        Xi_bar_star, lpqr_star  = propnf(Xi_1,yi,theta,np.log(u_1_norm))
+        #Xi_bar_star, lpqr_star  = propnf(Xi_1,yi,theta)
+        loglh_nf_star = lh(Xi_bar_star,yi,theta) 
+        #loglh_nf_star = loglh_nf[Xi_bar_indices]
+        log_v_1=np.log(wi_1) + loglh_nf_star + lpqr_star
+        v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_v_1n_j=np.log(v_1_norm[Xianc])
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
 
     @classmethod
     def auxilliaryparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
@@ -197,12 +244,152 @@ class pmpfl(object):
         Xi_1_j=Xi_1[Xianc,:]
         wi_1_j=wi_1[Xianc]
         log_v_1_j=log_v_1[Xianc]
-        #log_v_1n_j=np.log(v_1_norm[Xianc])
+        log_v_1n_j=np.log(v_1_norm[Xianc])
         Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
         loglh=lh(Xi,yi,theta)
         log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
         wi[:]=np.exp(log_wi-logsumexp(log_wi))
-        return logsumexp(log_wi)-np.log(n)
+        #return logsumexp(loglh+logpqratio)-np.log(n)
+        #return logsumexp(log_wi)-np.log(n)
+        #return logsumexp(log_wi) - logsumexp(np.log(wi_1)) + logsumexp(log_v_1) - np.log(n)
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
+    @staticmethod
+    #@numba.jit
+    def fullessauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        if True:
+            ess_v = np.exp(-logsumexp(2*np.log(wi_1)))
+            for initer in range(100):
+                log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+                #print("Above ESS = {} for iter {}".format(ess_v/n, initer))
+            print("Iterated ESS/N = {}".format(ess_v/n))
+            print("log(gl/gu)^2 = {}".format(2*(loglh_nf.min() - loglh_nf.max())))
+            print("Comparison ESS = {} for 1/Nsum(wi_1^2)".format(np.exp(-logsumexp(2*np.log(wi_1))-np.log(n))))
+            print("Comparison ESS = {} for 1/Nsum(gi^2)".format(np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf)))-np.log(n))))
+        start_ess = (np.exp(-logsumexp(2*np.log(wi_1))), 1, 0,ess_v)
+        for outiter in range(len(start_ess)): 
+            ess_w = start_ess[outiter] #np.exp(-logsumexp(2*np.log(wi_1)))
+            for initer in range(10):
+                log_v_1=np.log(wi_1) + (ess_w/n) * loglh_nf
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+                print("Proxy v_ESS/N = {} for iters {} {}".format(ess_v/n, initer, outiter))
+                Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+                Xi_1_j=Xi_1[Xianc,:]
+                wi_1_j=wi_1[Xianc]
+                log_v_1_j=log_v_1[Xianc]
+                Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+                loglh=lh(Xi,yi,theta)
+                log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j#-normf
+                wi[:]=np.exp(log_wi-logsumexp(log_wi))
+                ess_w = np.exp(-logsumexp(2*np.log(wi)))
+                print("Final w_ESS/N = {} for wi at iters {} {}".format(ess_w/n,initer, outiter))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
+    @staticmethod
+    #@numba.jit
+    def garbageauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        log_g_j = np.zeros_like(loglh_nf)
+        log_g_j[:] = 2*(loglh_nf + lpqr) # sqrt of sqr # should np.copy()
+        Xianc[:] = range(n)
+        L = 1 # number of times g_j has been approximated
+        if True:
+            temps = 1000
+            ntemp = 1. / temps
+            max_ess_v = 0
+            argmax_ess_v = 0
+            log_v_1 = np.log(wi_1)
+            v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+            for temp in range(temps):
+                log_v_1=np.log(v_1_norm) + ntemp * 0.5 * log_g_j
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+                if ess_v < n*0.5:
+                    print("Resampling L = {}, ess_v/n = {}".format(L,ess_v/n))
+                    # resample
+                    new_j=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+                    Xianc[:] = Xianc[new_j]
+                    log_g_j[:] = log_g_j[new_j]
+                    v_1_norm[:] = 1./n
+                    # simulate forward again?
+                    Xi_bar_, lpqr_ = propnf(Xi_1[Xianc[:]],yi,theta)
+                    loglh_nf_ = lh(Xi_bar_,yi,theta) 
+                    log_g_j[:] = logsumexp_pair(log_g_j + np.log(L),2*(loglh_nf_ + lpqr_)) - np.log(L+1)
+                    L += 1
+                    # now run Gibbs. The variables are the indices which we will sample from 
+                    # full conditionals are ...?
+                if temp % 100 == 0:
+                    print("L = {}, ess_v/n = {}".format(L,ess_v/n))
+                #print("Iterated ESS = {} for iter {}".format(ess_v/n, temp))
+            #set final weights
+            log_v_1=np.log(wi_1[Xianc]) + 0.5 * log_g_j
+            v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+            ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+            print("ESS_V/N = {}".format(ess_v/n))
+            print("Comparison ESS = {} for 1/Nsum(wi_1^2)".format(np.exp(-logsumexp(2*np.log(wi_1))-np.log(n))))
+        #Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_nf_j=loglh_nf[Xianc]
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        ess_w = np.exp(-logsumexp(2*np.log(wi)))
+        print("ESS_W/N = {} for final wi".format(ess_w/n))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
+    @staticmethod
+    @numba.jit
+    def alphaauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        if True:
+            temps = 100
+            ntemp = 1. / temps
+            max_ess_v = 0
+            argmax_ess_v = 0
+            for epsilon in range(temps):
+                log_v_1=np.log(wi_1) + (ntemp * epsilon) * loglh_nf
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+                if ess_v > max_ess_v:
+                    argmax_ess_v = epsilon
+                    max_ess_v = ess_v
+                #print("Iterated ESS = {} for iter {}".format(ess_v/n, epsilon))
+            log_v_1=np.log(wi_1) + (ntemp * argmax_ess_v) * loglh_nf
+            v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+            ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+            #print("Iterated ESS = {}".format(ess_v/n))
+            #print("log(gl/gu)^2 = {}".format(2*(loglh_nf.min() - loglh_nf.max())))
+            #print("Comparison ESS = {} for 1/Nsum(wi_1^2)".format(np.exp(-logsumexp(2*np.log(wi_1))-np.log(n))))
+            #print("Comparison ESS = {} for 1/Nsum(gi^2)".format(np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf)))-np.log(n))))
+            #print("Comparison ESS = {} for 1/Nsum((wi_1gi)^2)".format(np.exp(-logsumexp(2*((np.log(wi_1)+loglh_nf)-logsumexp(np.log(wi_1)+loglh_nf)))-np.log(n))))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_nf_j=loglh_nf[Xianc]
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        ess_w = np.exp(-logsumexp(2*np.log(wi)))
+        #print("ESS/N = {} for final wi".format(ess_w/n))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
 
     @staticmethod
     @numba.jit
@@ -213,21 +400,51 @@ class pmpfl(object):
         loglh_nf = lh(Xi_bar,yi,theta) 
         #loglh_nf = lh(propnf(Xi_1,yi,theta),yi,theta)
         #ess = np.exp(-logsumexp(2*np.log(wi_1)))
-        ess_v = 1. * n
         #print("ESS = {}".format(ess))
         #log_v_1=np.log(wi_1) + loglh_nf
         #log_v_1=np.log(wi_1) + (ess/n) * loglh_nf
-        for epsilon in range(10):
+        if True:
+            #ess_v = 0.
+            #for epsilon in range(10):
+            #    log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
+            #    v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+            #    ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+            #    print("Below ESS = {} for iter {}".format(ess_v, epsilon))
+            ess_v = 1. * n
+            ess_v = np.exp(-logsumexp(2*np.log(wi_1)))
+            #ess_v = max(np.exp(-logsumexp(2*np.log(wi_1))),np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf)))))
+            #ess_v = 0
+            #ess_v = np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf))))
+            for epsilon in range(100):
+                log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
+                #log_v_1=np.log(wi_1) + (1-ess_v/n) * loglh_nf
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+                #print("Iterated ESS = {} for iter {}".format(ess_v/n, epsilon))
+            #print("Iterated ESS = {}".format(ess_v/n))
+            #print("log(gl/gu)^2 = {}".format(2*(loglh_nf.min() - loglh_nf.max())))
+            #ess_v = 1. * n
+            #ess_v = np.exp(-logsumexp(2*np.log(wi_1)))
+            #for epsilon in range(100):
+            #    log_v_1=(ess_v/n) * np.log(wi_1) + (ess_v/n) * loglh_nf
+            #    v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+            #    ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+            #    print("Full power ESS = {} for iter {}".format(ess_v, epsilon))
+            #print("Comparison ESS = {} for 1/Nsum(wi_1^2)".format(np.exp(-logsumexp(2*np.log(wi_1))-np.log(n))))
+            #print("Comparison ESS = {} for 1/Nsum(gi^2)".format(np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf)))-np.log(n))))
+            #print("Comparison ESS = {} for 1/Nsum((wi_1gi)^2)".format(np.exp(-logsumexp(2*((np.log(wi_1)+loglh_nf)-logsumexp(np.log(wi_1)+loglh_nf)))-np.log(n))))
+        else:
+            ess_v = 0.5 * n
             log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
             v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
-            ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
-            #print("ESS = {} for iter {}".format(ess_v, epsilon))
+            #ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
         Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
         Xi_1_j=Xi_1[Xianc,:]
         wi_1_j=wi_1[Xianc]
+        # secret sauce, I don't know how it works.
         normf = logsumexp(loglh_nf) - logsumexp((1-ess_v/n)*loglh_nf) # sum(g)/sum(g^alpha) , alpha = ess_v/n
         #print("logsum(lh_nf) = {}, normf = {}".format(logsumexp(loglh_nf),normf))
-        log_v_1 += normf
+        #log_v_1 += normf
         log_v_1_j=log_v_1[Xianc]
         log_nf_j=loglh_nf[Xianc]
         #log_v_1_r_j=np.log(wi_1_j) + loglh_nf[Xianc]
@@ -239,7 +456,8 @@ class pmpfl(object):
         wi[:]=np.exp(log_wi-logsumexp(log_wi))
         ess_w = np.exp(-logsumexp(2*np.log(wi)))
         #print("ESS = {} for final wi".format(ess_w))
-        return logsumexp(log_wi)-np.log(n)
+        #return logsumexp(log_wi)-np.log(n)
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
 
     #@numba.jit
     @staticmethod
@@ -322,9 +540,8 @@ class pmpfl(object):
         wi[:]=np.exp(log_wi-logsumexp(log_wi))
         return logsumexp(log_wi)-np.log(n)
 
-
     @classmethod
-    def bootstrapparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
+    def debugbootstrapparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
         if not np.isfinite(wi_1).all():
             print("Infinite entries in wi_1: {}".format(np.argwhere(~np.isfinite(wi_1))))
             sys.exit(0)
@@ -363,6 +580,21 @@ class pmpfl(object):
             sys.exit(0)
         logml = logsumexp_log_wi_next - np.log(n)
         return logml
+
+    @staticmethod
+    @numba.jit
+    def bootstrapparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
+        # Resample
+        Xianc[:]=resample(wi_1,n)
+        Xi_1_rs=Xi_1[Xianc[:],:]
+        # Propagate
+        Xi[:],logpqratio = innov(Xi_1_rs,yi,theta)
+        loglh = lh(Xi,yi,theta)
+        # Compute weights
+        log_wi = loglh + logpqratio 
+        logsumexp_log_wi = logsumexp(log_wi)
+        wi[:] = np.exp(log_wi - logsumexp_log_wi)
+        return logsumexp_log_wi - np.log(n)
 
     @classmethod
     def experimentalparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov):
@@ -433,10 +665,10 @@ def logmultdiff(w,x0,x,v):
         r[i] = logsumexp(w - 0.5 * np.sum((x - x0[i,...])**2/v))
     return r
 
-@numba.jit
+@numba.jit("i4[:](f8[:],i4)")
 def resample(weights,n):
     #n = weights.shape[0]
-    indices = np.zeros_like(weights)
+    indices = np.zeros_like(weights,dtype=np.int32)
     #C = [0.] + [sum(weights[:i+1]) for i in range(n)]
     C = np.cumsum(weights) * n
     u0 = np.random.uniform(0,1)
