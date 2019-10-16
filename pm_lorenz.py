@@ -203,8 +203,8 @@ def innov_lindstrom_bridge(X_k,y_J,theta):
     trX=X2tr(X_k)
     Xnext=np.zeros_like(trX)
     Xnext[:]=trX[:]
-    Xshape0 = X_k.shape[0]
-    logpqratio=np.zeros(Xshape0)
+    N = X_k.shape[0]
+    logpqratio=np.zeros(N)
     beta_all = np.eye(3) # process noise on all variables
     beta_xx = np.eye(2) # process noise on observed variables TODO make F'beta F
     gamma = 0.5
@@ -279,7 +279,11 @@ def propagate_noisefree_target_idx(X,y_J,theta,target_idx = None):
 
 #TODO compute probability of path (same for all I guess)    
 #@numba.jit
-def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
+def propagate_noisefree_ismax(X,y_J,theta,llhnorm_t = None):
+    """
+    An experiment that attempts to find a cheap better estimate of the max likelihood
+    to approximate the local optimal density (as per Doucet) 
+    """
     global obsinterval
     global dt #=0.001 # TODO make DRY
     trth=theta2tr(theta)
@@ -314,7 +318,7 @@ def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
         # come up with some good candidate targets.
         target_idx = np.zeros(n, dtype=np.int64)
         #target_idx[:] = np.clip(np.arange(n, dtype=np.int32) -1,0,n-1)
-        target_idx[1:] = np.arange(n-1)
+        #target_idx[1:] = np.arange(n-1)
         #print("target idx = {}".format(target_idx))
     for i in range(obsinterval): # TODO make this every 40th DRY
         (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
@@ -324,13 +328,9 @@ def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
         if llhnorm_t is not None:
             x_mu_indnf = Xnext[target_idx]
             proposed_pq = logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) -  logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
-            #print("Target success idx = {}".format(np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx], True, False)))
-            #target_success_idx[:] = np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx], target_idx, target_success_idx) 
             success_idx = np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx],True,False) 
             target_success_idx[success_idx] = target_idx[success_idx]
             logpqratio[success_idx] = proposed_pq[success_idx]
-            #logpqratio[:] = np.maximum(proposed_pq,logpqratio)
-            #logpqratio[:] += logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) - logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
             #print("success idx = {}".format(success_idx))
             #print("target success idx = {}".format(target_success_idx))
             #print("logpqratio = {}".format(logpqratio))
@@ -339,6 +339,108 @@ def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
         ridx_llh_t[idx_llh_t] = target_success_idx # find way to do this in one line
         rtXnext = rtXnext[ridx_llh_t]
     return rtXnext, logpqratio #np.zeros(X.shape[0])
+
+
+#TODO compute probability of path (same for all I guess)    
+#@numba.jit
+def propagate_noisefree_lindstrom(X,y_J,theta):
+    """
+    An experiment that attempts to find a cheap better estimate of the max likelihood
+    to approximate the local optimal density (as per Doucet) 
+    """
+    global obsinterval
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X)
+    Xnext=np.zeros_like(trX)
+    #logpqratio_K=np.zeros((X.shape[0],obsinterval))
+    n = X.shape[0]
+    logpqratio=np.zeros(n) # This can't be zero because that's maximum already.
+    beta_all = np.eye(3) # process noise on all variables
+    Xnext[:]=trX[:]
+    if llhnorm_t is not None:
+        idx_llh_t = np.argsort(llhnorm_t)[::-1] #,kind='stable')
+        # re-index X to sorted
+        Xnext = Xnext[idx_llh_t,...]
+        sllhnorm_t = llhnorm_t[idx_llh_t]
+        #target_success_idx = np.arange(n, dtype=np.int32)
+        target_success_idx = np.zeros(n, dtype=np.int64)
+        target_success_idx[:] = np.arange(n)
+        # reverse indices
+        ridx_llh_t = np.zeros(n, dtype=np.int64)
+        ridx_llh_t[idx_llh_t] = target_success_idx # find way to do this in one line
+        # come up with some good candidate targets.
+        target_idx = np.zeros(n, dtype=np.int64)
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+
+        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        Xnext = Xnext + a_t*dt
+        if llhnorm_t is not None:
+            x_mu_indnf = Xnext[target_idx]
+            proposed_pq = logmvnorm_vectorised(x_mu_indnf,Xnext,beta_all*dt) -  logmvnorm_vectorised(Xnext,Xnext,beta_all*dt)
+            success_idx = np.where(proposed_pq+sllhnorm_t[target_idx] >= logpqratio+sllhnorm_t[target_success_idx],True,False) 
+            target_success_idx[success_idx] = target_idx[success_idx]
+            logpqratio[success_idx] = proposed_pq[success_idx]
+            #print("success idx = {}".format(success_idx))
+            #print("target success idx = {}".format(target_success_idx))
+            #print("logpqratio = {}".format(logpqratio))
+    rtXnext=tr2X(Xnext)
+
+@numba.jit 
+def locally_opt_proposal_lindstrom_bridge(X_k,y_J,theta):
+    """
+    THe weight that we use for this modified diffusion bridge proposal 
+    require the computation of both the proposal q and transition p densitites
+    for w_i=\frac{p(y^i_t|x^i_t}p(x^i_t|x^i_{t-1})}{q(x^i_t|x^i_{t-1})}
+    """
+    global obsinterval
+    global dt 
+    trth=theta2tr(theta)
+    trX=X2tr(X_k)
+    Xnext=np.zeros_like(trX)
+    Xnext[:]=trX[:]
+    N = X_k.shape[0]
+    logpqratio=np.zeros(N)
+    beta_all = np.eye(3) # process noise on all variables
+    beta_xx = np.eye(2) # process noise on observed variables TODO make F'beta F
+    gamma = 0.5
+    for i in range(obsinterval): # TODO make this every 40th DRY
+        dk = (obsinterval - i) * dt
+        dk1 = (obsinterval - (i+1)) * dt
+        C = (gamma/dt) * beta_xx 
+        P_k = np.linalg.inv(beta_xx*dk + C*(dk1**2) + obserr_mat()) # updated precision matrix
+        P_k3 = doubledot(obs_map(),P_k) #np.dot(np.dot(obs_map(),P_k),obs_map().T)
+        psi_mdb = beta_all - P_k3 * dt
+        # lorenz model
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        mu_mdb = a_t + np.dot(np.dot(P_k3,obs_map()),( y_J - np.dot(Xnext + a_t*dk,obs_map())).T).T
+        x_mu_mdb = Xnext + mu_mdb*dt
+        x_mu_em = Xnext + a_t*dt
+        Xnext[:] = x_mu_mdb 
+        logpqratio[:] += logmvnorm_vectorised(Xnext,x_mu_em,beta_all*dt) - logmvnorm_vectorised(Xnext,x_mu_mdb,psi_mdb*dt)
+    rtXnext=tr2X(Xnext)
+    return rtXnext, logpqratio
+
+#TODO compute probability of path (same for all I guess)    
+@numba.jit
+def propagate_noisefree(X,y_J,theta,llhnorm_t = None):
+    global obsinterval
+    global dt #=0.001 # TODO make DRY
+    trth=theta2tr(theta)
+    trX=X2tr(X)
+    Xnext=np.zeros_like(trX)
+    n = X.shape[0]
+    logpqratio=np.zeros(n) 
+    Xnext[:]=trX[:]
+    for i in range(obsinterval): 
+        (xdot,ydot,zdot) = lorenz(Xnext[:,0],Xnext[:,1],Xnext[:,2],trth[0],trth[1],trth[2])
+
+        a_t = np.column_stack((xdot,ydot,zdot)) # partitioned to observed and latent
+        Xnext = Xnext + a_t*dt
+    rtXnext=tr2X(Xnext)
+    return rtXnext, logpqratio 
 
 #TODO return p and q separately
 @numba.jit #("float64[:][:](float64[:][:],float64[:])")
@@ -538,7 +640,7 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=2048 #1024 #8192 #1024 #16384 #2048 #512
+        n=100 #2048 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
@@ -548,7 +650,8 @@ if __name__ == '__main__':
         #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_bridge,propagate_noisefree,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
-        sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
+        #sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
+        sampler = pmpfl(innov,locally_opt_proposal_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov_lindstrom_residual_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov,lh,Y,3,3,n)

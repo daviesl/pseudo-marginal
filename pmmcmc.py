@@ -180,7 +180,7 @@ class pmpfl(object):
 #        # ancestry trace the final target distrubution particles and sum the weights for each
     @classmethod
     def particlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
-        if False:
+        if True:
             return cls.bootstrapparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
         elif False:
             return cls.experimentalparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
@@ -198,7 +198,7 @@ class pmpfl(object):
             return cls.alphaauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
         elif False:
             return cls.garbageauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
-        elif True:
+        elif False:
             return cls.onkauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
 
     @staticmethod
@@ -462,6 +462,9 @@ class pmpfl(object):
     #@numba.jit
     @staticmethod
     def improvedauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        """
+        Elvira, requires pointwise evaluable transition densities
+        """
         # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
         # Compute the posterior integral p(y_t | x_{t-1})
         Xi_bar = propnf(Xi_1,yi,theta)
