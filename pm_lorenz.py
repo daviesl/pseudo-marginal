@@ -640,7 +640,7 @@ if __name__ == '__main__':
             np.save("synthetic_Y_{}".format(timestr),Y)
         print("Y = {}".format(Y))
 
-        n=100 #2048 #1024 #8192 #1024 #16384 #2048 #512
+        n=200 #2048 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
         # run pmmh
@@ -650,8 +650,8 @@ if __name__ == '__main__':
         #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_bridge,propagate_noisefree,lh,Y,3,3,n)
         #sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
-        sampler = pmpfl(innov,locally_opt_proposal_lindstrom_bridge,lh,Y,3,3,n)
+        sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
+        #sampler = pmpfl(innov,locally_opt_proposal_lindstrom_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov_lindstrom_residual_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov,lh,Y,3,3,n)

@@ -200,6 +200,8 @@ class pmpfl(object):
             return cls.garbageauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
         elif False:
             return cls.onkauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
+        elif False:
+            return cls.sqrtauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
 
     @staticmethod
     #@numba.jit
@@ -220,6 +222,26 @@ class pmpfl(object):
         loglh_nf_star = lh(Xi_bar_star,yi,theta) 
         #loglh_nf_star = loglh_nf[Xi_bar_indices]
         log_v_1=np.log(wi_1) + loglh_nf_star + lpqr_star
+        v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_v_1n_j=np.log(v_1_norm[Xianc])
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
+    @classmethod
+    def sqrtauxilliaryparticlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        """
+        Always flatten the likelihood in the look ahead by ^(1/2)
+        """
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        log_v_1=np.log(wi_1) + 0.5*(loglh_nf + lpqr)
         v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
         Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
         Xi_1_j=Xi_1[Xianc,:]
@@ -410,12 +432,12 @@ class pmpfl(object):
             #    v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
             #    ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
             #    print("Below ESS = {} for iter {}".format(ess_v, epsilon))
-            ess_v = 1. * n
+            #ess_v = 1. * n
             ess_v = np.exp(-logsumexp(2*np.log(wi_1)))
             #ess_v = max(np.exp(-logsumexp(2*np.log(wi_1))),np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf)))))
             #ess_v = 0
             #ess_v = np.exp(-logsumexp(2*(loglh_nf-logsumexp(loglh_nf))))
-            for epsilon in range(100):
+            for epsilon in range(20):
                 log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
                 #log_v_1=np.log(wi_1) + (1-ess_v/n) * loglh_nf
                 v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
