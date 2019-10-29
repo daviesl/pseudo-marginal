@@ -13,30 +13,35 @@ class stateSpaceModel(object):
     """
     defaults: One parameter, one state variable.
     """
-    def X_size(self):
+    @classmethod
+    def X_size(cls):
         return 1
-    def theta_size(self):
+    @classmethod
+    def theta_size(cls):
         return 1
-    def get_innov(self):
-        """
-        TODO: return a handle to the innov fn for numba JIT
-        """
-        return self.class_innov
-    def innov(self,X_k,y_J,theta):
-        return self.class_innov(X_k,y_J,theta)
-    @staticmethod
-    @numba.jit
-    def class_innov(X_k,y_J,theta):
-        """
-        Increment state X to next time point defined by 
-            observation interval
-        Computes stochastic terms.
-        """
-        _N_ = X_k.shape[0]
-        dim = X_k.shape[1]
-        dW_t = np.random.normal(0,1,(_N_,dim))
-        X_k1 = X_k + self.A(theta)*self.dt + self.B(theta)*math.sqrt(self.dt)
-        return X_k1, np.ones(_N_) # (next X, logpqratio)
+    @classmethod
+    def y_dim(cls):
+        return 1
+    #def get_innov(self):
+    #    """
+    #    TODO: return a handle to the innov fn for numba JIT
+    #    """
+    #    return self.class_innov
+    #def innov(self,X_k,y_J,theta):
+    #    return self.class_innov(X_k,y_J,theta)
+    #@staticmethod
+    #@numba.jit
+    #def class_innov(X_k,y_J,theta):
+    #    """
+    #    Increment state X to next time point defined by 
+    #        observation interval
+    #    Computes stochastic terms.
+    #    """
+    #    _N_ = X_k.shape[0]
+    #    dim = X_k.shape[1]
+    #    dW_t = np.random.normal(0,1,(_N_,dim))
+    #    X_k1 = X_k + self.A(theta)*self.dt + self.B(theta)*math.sqrt(self.dt)
+    #    return X_k1, np.ones(_N_) # (next X, logpqratio)
 
 class ItoProcess(stateSpaceModel):
     """
@@ -54,9 +59,6 @@ class ItoProcess(stateSpaceModel):
     And then subsequent classes that inherit should be the process
         itself with drift, diffusion and loglikelihood defined.
     """
-    @classmethod
-    def self.y_dim(cls):
-        return 1
     @classmethod
     def obserr(cls):
         return 1.0
@@ -76,7 +78,8 @@ class ItoProcess(stateSpaceModel):
     @staticmethod
     @numba.jit
     def diffusion(X_k,y_J,theta):
-        return np.ones(X_k.shape)
+        # TODO rename to volatility
+        return np.eye(X_k.shape[1])
     @staticmethod
     @numba.jit
     def transformXtoState(X):
@@ -110,7 +113,7 @@ class ItoProcess(stateSpaceModel):
                 dW_t = np.random.normal(0,1,X_k.shape)
                 next_state += drift(next_state,y_J,trth)*delta_t
             return tr2X(next_state),np.zeros(X_k.shape[0]) 
-        return EMInnovClosure
+        return EMDriftClosure
     @classmethod
     def generateInnovation(cls):
         #a lambda function closure of the below eulermaruyama with drift and diffusion
@@ -138,14 +141,14 @@ class ItoProcess(stateSpaceModel):
             trth = theta2tr(theta)
             for i in range(obsinterval):
                 dW_t = np.random.normal(0,1,X_k.shape)
-                next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2d(np.sqrt(diffusion(next_state,y_j,trth) * delta_t),dW_t)
+                next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2x1_broadcast(np.sqrt(diffusion(next_state,y_J,trth) * delta_t),dW_t)
             return tr2X(next_state),np.zeros(X_k.shape[0]) 
         return EMInnovClosure
     @classmethod
     def generateLogLikelihood(cls):
         # As above with the innovation closure
         # pull out things like observation error etc.
-        dim = y_dim()
+        dim = cls.y_dim()
         cov = cls.observationCovariance()
         obseqn = cls.observationEquation
         X2tr = cls.transformXtoState
@@ -162,6 +165,7 @@ class ItoProcess(stateSpaceModel):
             log_lh_un = (-0.5*(dd)) 
             norm_const = - (dim*0.5) * np.log(2*np.pi) - 0.5 * np.log(np.linalg.det(cov))
             return log_lh_un + norm_const
+        return loglhClosure
             
 # Extend ItoProcess class for all bridge processes
 # Define the model class separately or extend ItoProcess.
@@ -189,19 +193,19 @@ class ModifiedDiffusionBridge(ItoProcess):
             for i in range(obsinterval): 
                 a_t = drift(next_state,y_J,trth) 
                 beta_all = diffusion(next_state,y_J,trth)
-                beta_xx = doublemdla_dottrail2d_broadcast(obs_map,beta_all)
+                beta_xx = doublemdla_dottrail2x2_broadcast(obs_map,beta_all)
                 dW_t = np.random.normal(0,1,X_k.shape)
                 # MDB specific quantities
                 dk = (obsinterval - i) * delta_t
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
-                C_P_k_C = doublemdla_dottrail2d_broadcast(obs_map.T,P_k)
+                C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map.T,P_k)
                 psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2d(mdla_dottrail2d_broadcast(obs_map.T,C_P_k_C),( y_J - mdla_dottrail2d_broadcast(obs_map.T,next_state + a_t*dk)).T).T
+                mu_mdb = a_t + mdla_dottrail2x2(mdla_dottrail2x2_broadcast(obs_map.T,C_P_k_C),( y_J - mdla_dottrail2x2_broadcast(obs_map.T,next_state + a_t*dk)).T).T
                 x_mu_mdb = Xnext + mu_mdb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = Xnext + a_t*delta_t
-                next_state[:] = x_mu_mdb + mdla_dottrail2d(np.sqrt(delta_t*psi_mdb),dW_t)
+                next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(np.sqrt(delta_t*psi_mdb),dW_t)
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*dt) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*dt)
             return tr2X(next_state), logpqratio
         return MDBInnovClosure
@@ -223,10 +227,15 @@ class stateFilter(object):
         self.y_all = y_all
         self.T = T
         self.n = n
+        # rest of ssm defn
         self.ssm = ssm
         self.innov = self.ssm.generateInnovation()
         self.propnf = self.ssm.generateDeterministicDrift()
         self.lh = self.ssm.generateLogLikelihood()
+        # state variable result, ancestry and weights. TODO refactor to result class
+        self.X_all = np.zeros((T,n,self.ssm.X_size()))
+        self.X_ancestry = np.tile(np.arange(n),(T,1))
+        self.w_all = np.ones((T,n)) * (1./n)
     def test_filter(self,num_runs,X0,theta0):
         theta=theta0 #np.zeros((self.theta_size))
         logml_chain=np.zeros((num_runs))
@@ -237,7 +246,7 @@ class stateFilter(object):
             for i in range(1,self.T):
                 log_ml[i] = self.filter_step(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov,self.propnf)
                 #print("X_all[{},:] = {}".format(i,self.X_all[i,:]))
-                #print("X_all[{},:] = {}, y={}".format(i,self.X_all[i,:],self.y_all[i-1,:]))
+                #print("X_all[{},:] = {}, y={}".format(i,self.ssm.transformXtoState(self.X_all[i,:]),self.y_all[i-1,:]))
                 #print("y={}".format(self.y_all[i-1,:]))
                 #print("log_ml[{}] = {}".format(i,log_ml[i]))
             #print("X_all[{},:] = {}".format(self.T-1,self.X_all[self.T-1,:]))

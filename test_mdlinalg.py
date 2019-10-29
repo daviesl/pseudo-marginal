@@ -18,19 +18,24 @@ class TestMDLinAlg(unittest.TestCase):
         bF = mdla_broadcast_to(self.F,(5,2,3))
         self.assertSequenceEqual(bF.tolist(),np.broadcast_to(self.F,(5,2,3)).tolist())
 
-    def test_mdla_dottrail2d_broadcast(self):
-        C = mdla_dottrail2d_broadcast(self.F,self.B)
+    def test_mdla_dottrail2x1_broadcast(self):
+        Ar = self.A[:,0,:]
+        C = mdla_dottrail2x1_broadcast(self.F,Ar)
+        self.assertSequenceEqual(C.tolist(),self.A[:,(0,),(0,2)].tolist())
+
+    def test_mdla_dottrail2x2_broadcast(self):
+        C = mdla_dottrail2x2_broadcast(self.F,self.B)
         self.assertSequenceEqual(C.tolist(),self.B[:,(0,2),:].tolist())
 
-    def test_mdla_dottrail2d(self):
-        C = mdla_dottrail2d(self.A,self.B)
+    def test_mdla_dottrail2x2(self):
+        C = mdla_dottrail2x2(self.A,self.B)
         trueC = np.ones((4,2,2))
         for i in range(4):
             trueC[i,...] = np.dot(self.A[i,...],self.B[i,...])
         self.assertSequenceEqual(C.tolist(),trueC.tolist())
 
     def test_mdla_invtrail2d(self):
-        #C = mdla_dottrail2d(self.A,self.B)
+        #C = mdla_dottrail2x2(self.A,self.B)
         C = np.broadcast_to(np.eye(3),(4,3,3))*np.arange(1,4)
         #print(C)
         #print("C.ndim = {}".format(C.ndim))

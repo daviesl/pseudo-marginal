@@ -1,6 +1,11 @@
 import numpy as np
 import numba
 
+@numba.jit #("float64[:](float64[:][:],float64[:][:],float64[:][:])")
+def logmvnorm_vectorised(X,mu,cov):
+    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
+
+
 @numba.jit("f8(f8[:])")
 def logsumexp(ns):
     m = np.max(ns)
@@ -31,7 +36,7 @@ def doubledot(outer,inner):
     return np.dot(np.dot(outer,inner),outer.T)
 
 @numba.jit(nopython=True)
-def mdla_dottrail2d(A,B):
+def mdla_dottrail2x2(A,B):
     """
     The idea is to run a dot product on the last k dimensions
     of two matrices. This way the first 0 to n-k dimensions
@@ -54,6 +59,27 @@ def mdla_dottrail2d(A,B):
                 C[...,i,j] += A[...,i,k]*B[...,k,j] 
     return C
 
+@numba.jit(nopython=True)
+def mdla_dottrail2x1(A,B):
+    """
+    The idea is to run a dot product on the last k dimensions
+    of two matrices. This way the first 0 to n-k dimensions
+    of the multidimensional matrices can be preserved.
+    Somehow require that dim(A) >= 2 and dim(B) >= 1
+    and dim(A)==dim(B)
+    and A.shape[:-2] == B.shape[:-2]
+    and A.shape[-1] == B.shape[-2]
+    """
+    m = A.shape[-2]
+    n = A.shape[-1]
+    Cshape = A.shape[:-2] + (m,)
+
+    C = np.zeros(Cshape)
+
+    for i in range(0,m):
+        for k in range(0,n):
+            C[...,i] += A[...,i,k]*B[...,k]
+    return C
 
 @numba.jit
 def xTPx(x,P):
@@ -81,32 +107,40 @@ def mdla_broadcast_to(a,shape):
 #def nccat(a,b):
 #    return np.concatenate((a,b))
 
-@numba.jit(nopython=True)#('f8[:,:,:](f8[:,:],f8[:,:,:])',nopython=True)
-def mdla_dottrail2d_broadcast(A,B):
+#@numba.jit(nopython=True)
+@numba.jit('f8[:,:,:](f8[:,:],f8[:,:,:])',nopython=True)
+def mdla_dottrail2x2_broadcast(A,B):
     # broadcast A
-    shape = B.shape[:-2]+A.shape
+    shape = B.shape[:-2]+A.shape[-2:]
     Aa = mdla_broadcast_to(A,shape)
-    return mdla_dottrail2d(Aa,B)
+    return mdla_dottrail2x2(Aa,B)
+
+@numba.jit('f8[:,:](f8[:,:],f8[:,:])',nopython=True)
+def mdla_dottrail2x1_broadcast(A,B):
+    # broadcast A
+    Ashape = B.shape[:-1]+A.shape[-2:]
+    Aa = mdla_broadcast_to(A,Ashape)
+    return mdla_dottrail2x1(Aa,B)
 
 #@numba.jit('f8[:,:,:](f8[:,:,:],f8[:,:,:])',nopython=True)
-#def mdla_dottrail2d_broadcast(A,B):
-#    return mdla_dottrail2d(A,B)
+#def mdla_dottrail2x2_broadcast(A,B):
+#    return mdla_dottrail2x2(A,B)
 
-#def mdla_dottrail2d_broadcast(A,B):
+#def mdla_dottrail2x2_broadcast(A,B):
 #    if A.ndim > B.ndim:
 #        # broadcast B
 #        shape =A.shape[:-2]+B.shape[-2:]
 #        B_ = mdla_broadcast_to(B,shape)
 #        #B = np.broadcast_to(B,A.shape[:-2]+B.shape[-2:])
-#        return mdla_dottrail2d(A,B_)
+#        return mdla_dottrail2x2(A,B_)
 #    elif B.ndim > A.ndim:
 #        # broadcast A
 #        shape = B.shape[:-2]+A.shape[-2:]
 #        A_ = mdla_broadcast_to(A,shape)
 #        #A = np.broadcast_to(A,B.shape[:-2]+A.shape[-2:])
-#        return mdla_dottrail2d(A_,B)
+#        return mdla_dottrail2x2(A_,B)
 #    else:
-#        return mdla_dottrail2d(A,B)
+#        return mdla_dottrail2x2(A,B)
     
 
 #TODO numba tile
@@ -119,11 +153,11 @@ def numba_flattile(a,shape):
     #return np.ones(s1*s2).reshape((s1,)+a.shape)*a
 
 @numba.jit
-def doublemdla_dottrail2d_broadcast(outer,inner):
+def doublemdla_dottrail2x2_broadcast(outer,inner):
     """
     returns F C F' where F is a state to observation matrix
     """
-    return mdla_dottrail2d_broadcast(mdla_dottrail2d_broadcast(outer,inner),outer.T)
+    return mdla_dottrail2x2_broadcast(mdla_dottrail2x2_broadcast(outer,inner),outer.T)
 
 @numba.jit(nopython=True)
 def mdla_invtrail2d(A):
@@ -148,11 +182,11 @@ def mdla_invtrail2d(A):
 #        return np.linalg.inv(A)
 
 @numba.jit
-def doublemdla_dottrail2d(outer,inner):
+def doublemdla_dottrail2x2(outer,inner):
     """
     returns F C F' where F is a state to observation matrix
     """
-    return mdla_dottrail2d(mdla_dottrail2d(outer,inner),outer.T)
+    return mdla_dottrail2x2(mdla_dottrail2x2(outer,inner),outer.T)
 
 if __name__ == '__main__': 
     a,b,c = np.mgrid[1:5:1, 1:3:1, 1:4:1] 
@@ -167,17 +201,17 @@ if __name__ == '__main__':
     print("tiled F = {}".format(tileF))
     bF = mdla_broadcast_to(F,(5,2,3))
     print("broadcast F = {}".format(bF))
-    C = mdla_dottrail2d_broadcast(F,B)
+    C = mdla_dottrail2x2_broadcast(F,B)
     print("dot(F,B) = {}".format(C))
-    C = mdla_dottrail2d_broadcast(A,B)
+    C = mdla_dottrail2x2_broadcast(A,B)
     print("dot(A,B) = {}".format(C))
     C = np.dot(A,B)
     print("numpy.dot(A,B) = {}".format(C))
-    C = mdla_dottrail2d(B,A)
+    C = mdla_dottrail2x2(B,A)
     print("dot(B,A) = {}".format(C))
     C = np.dot(B,A)
     print("numpy.dot(B,A) = {}".format(C))
     # now try with a single dot mat
-    C = mdla_dottrail2d_broadcast(A[0,...],B)
+    C = mdla_dottrail2x2_broadcast(A[0,...],B)
     print("dot(A[0,...],B) = {}".format(C))
     
