@@ -12,7 +12,8 @@ import sys
 theta0 = np.array([10.,28.,2.667])
 #theta0 = np.array([10.,10,2.667])
 
-class Lorenz63Abstract(ItoProcess):
+#class Lorenz63Abstract(ItoProcess):
+class Lorenz63Abstract(ModifiedDiffusionBridge):
     @classmethod
     def X_size(self):
         return 3

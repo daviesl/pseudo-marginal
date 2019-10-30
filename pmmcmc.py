@@ -193,15 +193,24 @@ class ModifiedDiffusionBridge(ItoProcess):
             for i in range(obsinterval): 
                 a_t = drift(next_state,y_J,trth) 
                 beta_all = diffusion(next_state,y_J,trth)
-                beta_xx = doublemdla_dottrail2x2_broadcast(obs_map,beta_all)
+                #print("beta all shape={}".format(beta_all.shape))
+                beta_xx = doublemdla_dottrail2x2_broadcast(obs_map.T,beta_all)
+                #print("beta xx shape={}".format(beta_xx.shape))
                 dW_t = np.random.normal(0,1,X_k.shape)
                 # MDB specific quantities
                 dk = (obsinterval - i) * delta_t
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
-                C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map.T,P_k)
+                C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
+                #print("C_P_k_C.shape={}".format(C_P_k_C.shape))
                 psi_mdb = beta_all - C_P_k_C * delta_t
+                #test
+                #tst = y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk))
+                tst = mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk))))
+                #tst = (next_state + a_t*dk)
+                #print("tst.shape={}".format(tst.shape))
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2x2(mdla_dottrail2x2_broadcast(obs_map.T,C_P_k_C),( y_J - mdla_dottrail2x2_broadcast(obs_map.T,next_state + a_t*dk)).T).T
+                mu_mdb = a_t + mdla_dottrail2x1(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                #print("Mu mdb shape={}".format(mu_mdb.shape))
                 x_mu_mdb = next_state + mu_mdb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
