@@ -1,10 +1,33 @@
 import numpy as np
+import math
 import numba
 
 @numba.jit #("float64[:](float64[:][:],float64[:][:],float64[:][:])")
-def logmvnorm_vectorised(X,mu,cov):
-    return -0.5 * math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
+def logmvnorm_vectorised_staticcov(X,mu,cov):
+    # Annoyingly I can't overload the jit header with multiple dims for cov
+    Xdim = X.shape[1]
+    return -0.5 *Xdim* math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
 
+@numba.jit #("float64[:](float64[:][:],float64[:][:],float64[:][:])")
+def logmvnorm_vectorised(X,mu,cov):
+    Xdim = X.shape[1]
+    return -0.5 * Xdim * math.log(2. * math.pi) - 0.5 * np.log(mdla_dettrail2d(cov)) - 0.5 * xTPx_indivcov(X - mu,mdla_invtrail2d(cov))
+    #return -0.5 * Xdim * math.log(2. * math.pi) - 0.5 * np.log(mdla_dettrail2d(cov)) - 0.5 * doublemdla_dottrail2x2_broadcast(X - mu,mdla_invtrail2d(cov))
+
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
+def xTPx_staticcov(x,P):
+    '''
+    P must be the same for all rows of x, dim(P)=(n,n)
+    '''
+    return np.sum(np.dot(x,P)*x,axis=1)
+
+@numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
+def xTPx_indivcov(x,P):
+    '''
+    P can be individual for each row of x
+    '''
+    return np.sum(mdla_dottrail1x2(x,P)*x,axis=1)
 
 @numba.jit("f8(f8[:])")
 def logsumexp(ns):
@@ -81,6 +104,27 @@ def mdla_dottrail2x1(A,B):
             C[...,i] += A[...,i,k]*B[...,k]
     return C
 
+@numba.jit(nopython=True)
+def mdla_dottrail1x2(A,B):
+    """
+    The idea is to run a dot product on the last k dimensions
+    of two matrices. This way the first 0 to n-k dimensions
+    of the multidimensional matrices can be preserved.
+    Somehow require that dim(A) >= 1 and dim(B) >= 2
+    and dim(A)==dim(B)+1
+    and A.shape[-1] == B.shape[-2] == B.shape[-1]
+    """
+    m = B.shape[-2]
+    n = B.shape[-1]
+    Cshape = B.shape[:-2] + (m,)
+
+    C = np.zeros(Cshape)
+
+    for i in range(0,m):
+        for k in range(0,n):
+            C[...,i] += A[...,k]*B[...,i,k]
+    return C
+
 @numba.jit
 def xTPx(x,P):
     """
@@ -91,7 +135,8 @@ def xTPx(x,P):
     return np.sum(np.dot(x,P)*x,axis=1)
 
 
-@numba.jit('f8[:,:,:](f8[:,:],UniTuple(i8,3))',nopython=True)
+#@numba.jit('f8[:,:,:](f8[:,:],UniTuple(i8,3))',nopython=True)
+@numba.jit(nopython=True)
 def mdla_broadcast_to(a,shape):
     return np.ones(shape) * a
     #l=len(a.shape)
@@ -107,15 +152,16 @@ def mdla_broadcast_to(a,shape):
 #def nccat(a,b):
 #    return np.concatenate((a,b))
 
-#@numba.jit(nopython=True)
-@numba.jit('f8[:,:,:](f8[:,:],f8[:,:,:])',nopython=True)
+#@numba.jit('f8[:,:,:](f8[:,:],f8[:,:,:])',nopython=True)
+@numba.jit(nopython=True)
 def mdla_dottrail2x2_broadcast(A,B):
     # broadcast A
     shape = B.shape[:-2]+A.shape[-2:]
     Aa = mdla_broadcast_to(A,shape)
     return mdla_dottrail2x2(Aa,B)
 
-@numba.jit('f8[:,:](f8[:,:],f8[:,:])',nopython=True)
+#@numba.jit('f8[:,:](f8[:,:],f8[:,:])',nopython=True)
+@numba.jit(nopython=True)
 def mdla_dottrail2x1_broadcast(A,B):
     # broadcast A
     Ashape = B.shape[:-1]+A.shape[-2:]
@@ -158,6 +204,14 @@ def doublemdla_dottrail2x2_broadcast(outer,inner):
     returns F C F' where F is a state to observation matrix
     """
     return mdla_dottrail2x2_broadcast(mdla_dottrail2x2_broadcast(outer,inner),outer.T)
+
+@numba.jit(nopython=True)
+def mdla_dettrail2d(A):
+    A_ = A.copy().reshape((-1,)+A.shape[-2:])
+    Adet = np.zeros(A_.shape[:-2])
+    for k in range(A_.shape[0]):
+        Adet[k,...] = np.linalg.det(A_[k,...])
+    return Adet.reshape(A.shape[:-2])
 
 @numba.jit(nopython=True)
 def mdla_invtrail2d(A):

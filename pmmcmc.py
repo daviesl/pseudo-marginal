@@ -79,7 +79,7 @@ class ItoProcess(stateSpaceModel):
     @numba.jit
     def diffusion(X_k,y_J,theta):
         # TODO rename to volatility
-        return np.eye(X_k.shape[1])
+        return np.ones(X_k.shape+X_k.shape[-1:])*np.eye(X_k.shape[1])
     @staticmethod
     @numba.jit
     def transformXtoState(X):
@@ -184,7 +184,7 @@ class ModifiedDiffusionBridge(ItoProcess):
         obs_map = cls.obs_map()
         theta2tr = cls.transformThetatoParameters
         tr2theta = cls.transformParameterstoTheta
-        @numba.jit
+        @numba.jit(nopython=True)
         def MDBInnovClosure(X_k,y_J,theta):
             next_state = X2tr(X_k)
             trth = theta2tr(theta)
@@ -202,11 +202,11 @@ class ModifiedDiffusionBridge(ItoProcess):
                 psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
                 mu_mdb = a_t + mdla_dottrail2x2(mdla_dottrail2x2_broadcast(obs_map.T,C_P_k_C),( y_J - mdla_dottrail2x2_broadcast(obs_map.T,next_state + a_t*dk)).T).T
-                x_mu_mdb = Xnext + mu_mdb*delta_t
+                x_mu_mdb = next_state + mu_mdb*delta_t
                 # Compute EM drift for comparison
-                x_mu_em = Xnext + a_t*delta_t
+                x_mu_em = next_state + a_t*delta_t
                 next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(np.sqrt(delta_t*psi_mdb),dW_t)
-                logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*dt) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*dt)
+                logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
             return tr2X(next_state), logpqratio
         return MDBInnovClosure
    
