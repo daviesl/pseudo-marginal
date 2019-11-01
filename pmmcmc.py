@@ -347,6 +347,38 @@ class stateFilter(object):
             logml_chain[j] = log_ml.sum() # product of all marignal likelihoods
             print("log_ml.sum() = {}".format(logml_chain[j]))
         return logml_chain
+    def init_state_prior(self,X0_mu,X0_sigma):
+        """
+        TODO refactor to remove mu and sigma from this fn. Set in statefilter class/obj instead.
+             phase 2 TODO: make the priors user-determined.
+        """
+        #self.sf.X_all[0,:] = np.random.uniform(0,1,(self.sf.n,self.sf.X_size))
+        # init priors of state variables. Innovation fn must translate from N(0,1) to correct range.
+        self.X_all[0,:] = np.random.normal(X0_mu,X0_sigma,(self.n,self.ssm.X_size()))
+        #print(self.sf.X_all[0,:])
+        #print("Init prior to unif(0,1)")
+        #print(self.sf.X_all[0,:])
+    def generateRunFilter(self):
+        # copy obj scope to local for closure
+        y_all = self.y_all
+        X_all = self.X_all
+        X_ancestry = self.X_ancestry
+        w_all = self.w_all
+        T = self.T
+        n = self.n
+        lh = self.lh
+        innov = self.innov
+        propnf = self.propnf
+        fs = self.filter_step
+        @numba.jit
+        def run_filter_for_params(theta):
+            log_ml = np.zeros(T)
+            for i in range(1,T):
+                # TODO add support for aux pf
+                log_ml[i] = fs(y_all[i-1,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+            # compute marginal likelihood of particle filter
+            return log_ml.sum()
+        return run_filter_for_params
     @staticmethod
     @numba.jit
     def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
@@ -363,7 +395,93 @@ class stateFilter(object):
         wi[:] = np.exp(log_wi - logsumexp_log_wi)
         return logsumexp_log_wi - np.log(n)
             
+class parameterEstimator(object):            
+    def __init__(self,sf):
+        self.sf = sf
+        self.T = sf.T
+        self.n = sf.n
+        self.theta_size = sf.ssm.theta_size()
+        self.runfilter = self.sf.generateRunFilter()
+    def run_pmmh(self,mcmc_chain_size,X0_mu,X0_sigma,theta0=None,pcov0=None):
+        # init priors, data is unseen at t=0
+        if theta0 is not None:
+            theta = np.tile(theta0,(mcmc_chain_size,1))
+        else:
+            theta = np.ones((mcmc_chain_size,self.theta_size)) * 0.5
+        ar = np.zeros(mcmc_chain_size)
+        logml_chain=np.ones((mcmc_chain_size))
+        logml_chain[:]=np.finfo(float).min
+        # don't store all of the priors, just the last one
+        prior_j=0
+        prior_j_1=1.0
+        initprop = 0.0001
+        if pcov0 is not None:
+            pcov = pcov0
+        else:
+            pcov = np.eye(self.theta_size) * initprop
+        for j in range(mcmc_chain_size):
+            if j>0:
+                thetamean = np.mean(theta[:j,:],axis=0)
+                ar_k = np.sum(ar[:j])*1./max(1,j-1)
+                if j < 2 or ar_k == 0:
+                    covnorm = 1.
+                    propscale = (2.38)**2/self.theta_size
+                else:
+                    propscale = (2.38)**2/self.theta_size
+                    covnorm = (1./(j-1))
+                    pcov = np.eye(self.theta_size) * 0.0000001 # condition
+                    # update cov
+                    for k in range(j):
+                        pcov += np.outer(theta[k,:]-thetamean,theta[k,:]-thetamean)*covnorm
+                # decompose 
+                # propose multivariate random normal
+                prop = np.random.multivariate_normal(np.zeros(self.theta_size),pcov*propscale)
+                #print("Proposing theta += {}, propscale = {}, ar_k = {}, pcov = {}".format(prop, propscale, ar_k, pcov))
+                theta[j,:]=theta[j-1,:]+prop
+                #propose theta using normal dist ar= 0.328
+                #theta[j,:]=theta[j-1,:]+np.random.normal(0,0.05,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                #propose theta using unif indep ar=0.499
+                #theta[j,:]=np.random.uniform(0,1,self.theta_size) # assuming the innov function scales the parameters appropriately.
+                
+            # use a uniform prior
+            prior_j = float(np.all(theta[j,:] <= 1) * np.all(theta[j,:] >= 0))
+            #prior_j = norm.pdf(theta[j,:]).prod()
+            #print("Prior[j] = {}".format(prior_j))
+            # within support of prior? If not, continue.
+            if prior_j == 0:
+                theta[j,:] = theta[j-1,:] 
+                ar[j]=0
+                if j>0:
+                    logml_chain[j]=logml_chain[j-1]
+                continue
             
+            # init priors of state variables. Innovation fn must translate from [0,1] to correct range.
+            self.sf.init_state_prior(X0_mu,X0_sigma)
+            # compute marginal likelihood of particle filter
+            logml_chain[j] = self.runfilter(theta[j,:]) 
+            ##print("1_Marginal likelihood at {} is {}".format(j, ml_j))
+            if j > 0:
+                #acceptance ratio
+                #log_a = min(0,logml_chain[j]+np.log(prior_j_1)-logml_chain[j-1]-np.log(prior_j)) # assuming normal priors on parameters
+                #log_a = min(0,logml_chain[j]+np.log(prior_j_1)-logml_chain[j-1]-np.log(prior_j)) # assuming normal priors on parameters
+                log_a = min(0,logml_chain[j]+np.log(prior_j)-logml_chain[j-1]-np.log(prior_j_1)) # assuming normal priors on parameters
+                # compute unif(0,1)
+                log_u = np.log(np.random.uniform(0,1))
+                print("Log a = {}, log_u = {}, accepting = {}".format(log_a,log_u,log_a>=log_u))
+                if log_a>=log_u:
+                    # keep the proposed theta 
+                    ar[j]=1
+                else:
+                    # backtrack to the last theta 
+                    theta[j,:] = theta[j-1,:] 
+                    logml_chain[j] = logml_chain[j-1]
+                    ar[j]=0
+            else:
+                logml_chain[j-1] = logml_chain[j]
+                prior_j_1 = prior_j
+            print("Theta at {} is {} {} {}".format(j,theta[j,0],theta[j,1],theta[j,2]))
+            print("Marginal likelihood at {} is {}".format(j, logml_chain[j]))
+        return (theta,logml_chain,ar,pcov)
         
 
 # a pseudo-marginal based sampler for a particle filter

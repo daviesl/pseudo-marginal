@@ -238,6 +238,7 @@ if __name__ == '__main__':
         #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov_lindstrom_residual_bridge,lh,Y,3,3,n)
         #sampler = pmpfl(innov,innov,lh,Y,3,3,n)
+        sampler = parameterEstimator(pf)
 
     if actionflag == 't':
         Lorenz63Abstract.plot_synthetic(X,Y)
@@ -277,7 +278,7 @@ if __name__ == '__main__':
         plt.show()
 
     elif actionflag == 'r':
-        plot_synthetic(X,Y)
+        Lorenz63Abstract.plot_synthetic(X,Y)
         #pcov_in = 2. * np.array([[ 6.53672845e-07,  1.80943850e-06, -2.23494164e-06],
         #           [ 1.80943850e-06,  5.00872523e-06, -6.18656485e-06],
         #           [-2.23494164e-06, -6.18656485e-06,  7.64138236e-06]])
