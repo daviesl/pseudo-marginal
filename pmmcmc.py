@@ -394,6 +394,59 @@ class stateFilter(object):
         logsumexp_log_wi = logsumexp(log_wi)
         wi[:] = np.exp(log_wi - logsumexp_log_wi)
         return logsumexp_log_wi - np.log(n)
+
+# The rest of the filters
+class auxiliaryParticleFilter(stateFilter):
+    @staticmethod
+    @numba.jit
+    def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        log_v_1=np.log(wi_1) + loglh_nf + lpqr
+        v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_v_1n_j=np.log(v_1_norm[Xianc])
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
+class ESSPartiallyAdaptedParticleFilter(stateFilter):
+    @staticmethod
+    @numba.jit
+    def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        if True:
+            ess_v = np.exp(-logsumexp(2*np.log(wi_1)))
+            for epsilon in range(20):
+                log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
+                v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+                ess_v = np.exp(-logsumexp(2*np.log(v_1_norm)))
+        else:
+            ess_v = 0.5 * n
+            log_v_1=np.log(wi_1) + (ess_v/n) * loglh_nf
+            v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_nf_j=loglh_nf[Xianc]
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        ess_w = np.exp(-logsumexp(2*np.log(wi)))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
+
             
 class parameterEstimator(object):            
     def __init__(self,sf):
