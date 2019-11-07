@@ -8,11 +8,20 @@ from mdlinalg import *
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 import sys
-from lorenz63ssm import Lorenz63Abstract, theta0
+from lorenz63ssm import Lorenz63Abstract
+from lorenz96ssm import Lorenz96Abstract
 
 class Lorenz63(LindstromBridge,Lorenz63Abstract):
     pass
+class Lorenz96(LindstromBridge,Lorenz96Abstract):
+    pass
 
+class ModelClass(Lorenz96):
+    pass
+
+synthetic_name = "Lorenz96_synthetic"
+
+theta0=ModelClass.default_theta()
 
 if __name__ == '__main__':
     timestr = time.strftime("%Y%m%d-%H%M%S")
@@ -23,11 +32,9 @@ if __name__ == '__main__':
     argctr += 1
 
     num_steps = 6400 #3200 #12800 #12800 #3200 #12800 # 1600
-    X0_ = np.array([0,1,1.05])
-    X0_ = X0_[np.newaxis,:]
-    #X0_mu = Lorenz63.transformStatetoX(np.array([[0,1,1.05],[0,1,1.05]]))
-    X0_mu = Lorenz63.transformStatetoX(X0_)
-    print("X0_mu = {}".format(X0_mu))
+    #X0_ = ModelClass.initialState() #np.array([0,1,1.05])
+    #X0_ = X0_[np.newaxis,:]
+    #X0_mu = ModelClass.transformStatetoX(np.array([[0,1,1.05],[0,1,1.05]]))
 
     if actionflag == 't' or actionflag == 'r':
         if (len(sys.argv) > 2):
@@ -37,15 +44,19 @@ if __name__ == '__main__':
             argctr += 1
             num_steps = X.shape[0] #3200 #12800 # 1600
         else:
-            X,Y = Lorenz63.synthetic(dt=Lorenz63.delta_t(),num_steps=num_steps)
-            np.save("synthetic_X_{}".format(timestr),X)
-            np.save("synthetic_Y_{}".format(timestr),Y)
-        print("Y = {}".format(Y))
+            X,Y = ModelClass.synthetic(dt=ModelClass.delta_t(),num_steps=num_steps)
+            np.save("{}_X_{}".format(synthetic_name,timestr),X)
+            np.save("{}_Y_{}".format(synthetic_name,timestr),Y)
+        print("X(shape {}) = {}".format(X.shape,X))
+        print("Y(shape {}) = {}".format(Y.shape,Y))
+
+        X0_mu = ModelClass.transformStatetoX(X[np.newaxis,0,...])
+        print("X0_mu = {}".format(X0_mu))
 
         n=200 #2048 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=1000
 
-        pf = stateFilter(Lorenz63(),Y,n)
+        pf = stateFilter(ModelClass(),Y,n)
 
         # run pmmh
         #sampler = pmpfl(innov_lindstrom_bridge,innov_lindstrom_bridge,lh,Y,3,3,n)
@@ -62,9 +73,9 @@ if __name__ == '__main__':
         sampler = parameterEstimator(pf)
 
     if actionflag == 't':
-        Lorenz63.plot_synthetic(X,Y,num_steps=num_steps)
+        ModelClass.plot_synthetic(X,Y,num_steps=num_steps)
         # Assert transformation is correct
-        XtrX = Lorenz63.transformXtoState(Lorenz63.transformStatetoX(X))
+        XtrX = ModelClass.transformXtoState(ModelClass.transformStatetoX(X))
         print("X = {}, XtrX = {}".format(X,XtrX))
         assert((np.abs(X - XtrX) < 0.00001).all())
         # print likelihood of true solution
@@ -73,10 +84,13 @@ if __name__ == '__main__':
         #testX[0,:] = X0_
         log_lh = np.zeros(T)
         for i in range(0,T):
-           #testX[i,:] = Lorenz63.transformXtoState(innov(Lorenz63.transformStatetoX(testX[i,:]),np.array([10.,28.,2.667])))
-           log_lh[i] = pf.lh(Lorenz63.transformStatetoX(X[np.newaxis,i*Lorenz63.obsinterval(),:]),Y[np.newaxis,i,:],np.zeros(3)) # last arg theta unused
+           #testX[i,:] = ModelClass.transformXtoState(innov(ModelClass.transformStatetoX(testX[i,:]),np.array([10.,28.,2.667])))
+           trx_=ModelClass.transformStatetoX(X[np.newaxis,i*ModelClass.obsinterval(),:])
+           try_=Y[np.newaxis,i,:]
+          
+           log_lh[i] = pf.lh(trx_,try_,ModelClass.default_theta()) # last arg theta unused
            #print("log lh at i={} is {}".format(i,log_lh[i]))
-           print("i={}, loglh = {}, X[i,:]={}, Y[i,:]={}".format(i,log_lh[i],Lorenz63.transformStatetoX(X[np.newaxis,i*Lorenz63.obsinterval(),:]),Y[i,:]))
+           print("i={}, loglh = {}, X[i,:]={}, Y[i,:]={}".format(i,log_lh[i],ModelClass.transformStatetoX(X[np.newaxis,i*ModelClass.obsinterval(),:]),Y[i,:]))
 
         print("synthetic observations T={} have log lh sum = {}".format(T,log_lh.sum()))
         fig = plt.figure()
@@ -85,7 +99,7 @@ if __name__ == '__main__':
         #fig = plt.figure()
         #plt.plot(testX[:,:,0])
         #plt.show()
-        ml_test = pf.test_filter(chain_length,X0_mu[0,:],Lorenz63.transformParameterstoTheta(theta0))
+        ml_test = pf.test_filter(chain_length,X0_mu[0,:],ModelClass.transformParameterstoTheta(theta0))
         ml_test_log_mean = logsumexp(ml_test) - math.log(chain_length)
         ml_test_log_var = 2. * ml_test_log_mean + np.log(np.sum((np.exp(ml_test-ml_test_log_mean)-1)**2)) - math.log(chain_length)
         
@@ -99,13 +113,13 @@ if __name__ == '__main__':
         plt.show()
 
     elif actionflag == 'r':
-        Lorenz63.plot_synthetic(X,Y,num_steps)
+        ModelClass.plot_synthetic(X,Y,num_steps)
         #pcov_in = 2. * np.array([[ 6.53672845e-07,  1.80943850e-06, -2.23494164e-06],
         #           [ 1.80943850e-06,  5.00872523e-06, -6.18656485e-06],
         #           [-2.23494164e-06, -6.18656485e-06,  7.64138236e-06]])
         burnin = 200
         initial_run = 400
-        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),Lorenz63.transformParameterstoTheta(theta0)) #,pcov0=pcov_in)
+        esttheta,ml,ar,pcov_out = sampler.run_pmmh(initial_run,X0_mu[0,:],np.array([0.,0.,0.]),ModelClass.transformParameterstoTheta(theta0)) #,pcov0=pcov_in)
         pcov_in = np.eye(3) * 0.0000001
         thetamean = np.mean(esttheta[burnin:,:],axis=0)
         covnorm = 1./(initial_run-burnin-1)
@@ -113,11 +127,11 @@ if __name__ == '__main__':
             pcov_in += np.outer(esttheta[k,:]-thetamean,esttheta[k,:]-thetamean)*covnorm
         print("P Covariance for second run = {}".format(pcov_in))
 
-        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),Lorenz63.transformParameterstoTheta(theta0),pcov0=pcov_in)
+        estparams,ml,ar,pcov_out = sampler.run_pmmh(chain_length,X0_mu[0,:],np.array([0.,0.,0.]),ModelClass.transformParameterstoTheta(theta0),pcov0=pcov_in)
         print("Acceptance rate = {}".format(1.*ar.sum()/chain_length))
     
         for i in range(estparams.shape[0]):
-            estparams[i,:]=Lorenz63.transformThetatoParameters(estparams[i,:])
+            estparams[i,:]=ModelClass.transformThetatoParameters(estparams[i,:])
         np.save("estparams_{}".format(timestr),estparams)
         np.save("ml_{}".format(timestr),ml)
         plot_traces(chain_length,estparams,ml)

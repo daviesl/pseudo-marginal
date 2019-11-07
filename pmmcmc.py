@@ -5,9 +5,10 @@ from scipy.stats import norm
 import sys
 from mdlinalg import *
 
-# TODO make a base class for a particle filter.
-# Then make a class for a pseudo marginal estimator
+# TODO make a base class for a particle filter. DONE
+# Then make a class for a pseudo marginal estimator DONE
 #      should this PM estimator class return model class likelihood? Only with SMC^2?
+# TODO 6/11/2019 need to take square root of process noise covariance matrix returned by diffusion().
 
 class stateSpaceModel(object):
     """
@@ -22,6 +23,9 @@ class stateSpaceModel(object):
     @classmethod
     def y_dim(cls):
         return 1
+    @classmethod
+    def initialState(cls):
+        return np.ones(cls.X_size())
     #def get_innov(self):
     #    """
     #    TODO: return a handle to the innov fn for numba JIT
@@ -70,7 +74,7 @@ class ItoProcess(stateSpaceModel):
         return 0.001
     @classmethod
     def observationCovariance(cls):
-        return np.eye(cls.y_dim()) * cls.obserr ** 2
+        return np.eye(cls.y_dim()) * (cls.obserr ** 2)
     @staticmethod
     @numba.jit
     def drift(X_k,y_J,theta):
@@ -79,7 +83,9 @@ class ItoProcess(stateSpaceModel):
     @numba.jit
     def diffusion(X_k,y_J,theta):
         # TODO rename to volatility
-        return np.ones(X_k.shape+X_k.shape[-1:])*np.eye(X_k.shape[1])
+        dim=X_k.shape[-1]
+        #return np.ones(X_k.shape+X_k.shape[-1:])*np.eye(dim)
+        return np.eye(dim)
     @staticmethod
     @numba.jit
     def transformXtoState(X):
@@ -110,7 +116,6 @@ class ItoProcess(stateSpaceModel):
             next_state = X2tr(X_k)
             trth = theta2tr(theta)
             for i in range(obsinterval):
-                dW_t = np.random.normal(0,1,X_k.shape)
                 next_state += drift(next_state,y_J,trth)*delta_t
             return tr2X(next_state),np.zeros(X_k.shape[0]) 
         return EMDriftClosure
@@ -140,8 +145,8 @@ class ItoProcess(stateSpaceModel):
             next_state = X2tr(X_k)
             trth = theta2tr(theta)
             for i in range(obsinterval):
-                dW_t = np.random.normal(0,1,X_k.shape)
-                next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2x1_broadcast(np.sqrt(diffusion(next_state,y_J,trth) * delta_t),dW_t)
+                dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
+                next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2x1_broadcast(spsd_sqrtm(diffusion(next_state,y_J,trth)),dW_t)
             return tr2X(next_state),np.zeros(X_k.shape[0]) 
         return EMInnovClosure
     @classmethod
@@ -194,18 +199,18 @@ class ModifiedDiffusionBridge(ItoProcess):
                 a_t = drift(next_state,y_J,trth) 
                 beta_all = diffusion(next_state,y_J,trth)
                 beta_xx = doublemdla_dottrail2x2_broadcast(obs_map.T,beta_all)
-                dW_t = np.random.normal(0,1,X_k.shape)
+                dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
                 # MDB specific quantities
                 dk = (obsinterval - i) * delta_t
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2x1(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                mu_mdb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
                 x_mu_mdb = next_state + mu_mdb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
-                next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(np.sqrt(delta_t*psi_mdb),dW_t)
+                next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
             return tr2X(next_state), logpqratio
         return MDBInnovClosure
@@ -224,7 +229,7 @@ class LindstromBridge(ItoProcess):
         obs_map = cls.obs_map()
         theta2tr = cls.transformThetatoParameters
         tr2theta = cls.transformParameterstoTheta
-        @numba.jit(nopython=True)
+        @numba.jit#(nopython=True)
         def LindstromInnovClosure(X_k,y_J,theta):
             next_state = X2tr(X_k)
             trth = theta2tr(theta)
@@ -232,7 +237,7 @@ class LindstromBridge(ItoProcess):
             logpqratio=np.zeros(Xshape0)
             gamma = 0.5
             for i in range(obsinterval): 
-                dW_t = np.random.normal(0,1,X_k.shape)
+                dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
                 dk = (obsinterval - i) * delta_t
                 dk1 = (obsinterval - (i+1)) * delta_t
                 a_t = drift(next_state,y_J,trth) 
@@ -245,11 +250,11 @@ class LindstromBridge(ItoProcess):
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2x1(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                mu_mdb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
                 x_mu_mdb = next_state + mu_mdb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
-                next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(np.sqrt(delta_t*psi_mdb),dW_t)
+                next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
             return tr2X(next_state), logpqratio
         return LindstromInnovClosure
@@ -281,7 +286,7 @@ class ResidualBridge(ItoProcess):
                 eta[:,:,i] = last_eta + drift(last_eta,y_J,trth)*delta_t
                 last_eta[:] = eta[:,:,i]
             for i in range(obsinterval): 
-                dW_t = np.random.normal(0,1,X_k.shape)
+                dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
                 dk = (obsinterval - i) * delta_t
                 r = next_state - eta[:,:,i] # eta[...,:]
                 chord = (eta[...,i+1]-eta[...,i])/delta_t
@@ -293,11 +298,11 @@ class ResidualBridge(ItoProcess):
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_rb = a_t + mdla_dottrail2x1(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
+                mu_rb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
                 x_mu_rb = next_state + mu_rb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
-                next_state[:] = x_mu_rb + mdla_dottrail2x1_broadcast(np.sqrt(delta_t*psi_mdb),dW_t)
+                next_state[:] = x_mu_rb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_rb,psi_mdb*delta_t)
             return tr2X(next_state), logpqratio
         return RBInnovClosure

@@ -8,7 +8,7 @@ def logmvnorm_vectorised_staticcov(X,mu,cov):
     Xdim = X.shape[1]
     return -0.5 *Xdim* math.log(2. * math.pi) - 0.5 * math.log(np.linalg.det(cov)) - 0.5 * np.sum(np.dot(X - mu,np.linalg.inv(cov)) * (X-mu), axis=1)
 
-@numba.jit #("float64[:](float64[:][:],float64[:][:],float64[:][:])")
+@numba.jit
 def logmvnorm_vectorised(X,mu,cov):
     Xdim = X.shape[1]
     return -0.5 * Xdim * math.log(2. * math.pi) - 0.5 * np.log(mdla_dettrail2d(cov)) - 0.5 * xTPx_indivcov(X - mu,mdla_invtrail2d(cov))
@@ -37,12 +37,12 @@ def xTPx_staticcov(x,P):
     '''
     return np.sum(np.dot(x,P)*x,axis=1)
 
-@numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
+@numba.jit(nopython=True) #("float64[:][:](float64[:][:],float64[:][:])")
 def xTPx_indivcov(x,P):
     '''
     P can be individual for each row of x
     '''
-    return np.sum(mdla_dottrail1x2(x,P)*x,axis=1)
+    return np.sum(mdla_dottrail1x2_broadcast_B(x,P)*x,axis=1)
 
 @numba.jit("f8(f8[:])")
 def logsumexp(ns):
@@ -119,6 +119,8 @@ def mdla_dottrail2x1(A,B):
             C[...,i] += A[...,i,k]*B[...,k]
     return C
 
+
+
 @numba.jit(nopython=True)
 def mdla_dottrail1x2(A,B):
     """
@@ -139,6 +141,12 @@ def mdla_dottrail1x2(A,B):
         for k in range(0,n):
             C[...,i] += A[...,k]*B[...,i,k]
     return C
+
+@numba.jit(nopython=True)
+def mdla_dottrail1x2_broadcast_B(A,B):
+    Bshape = A.shape[:-1]+B.shape[-2:]
+    Bb = mdla_broadcast_to(B,Bshape)
+    return mdla_dottrail1x2(A,Bb)
 
 @numba.jit
 def xTPx(x,P):
