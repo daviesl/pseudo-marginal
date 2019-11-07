@@ -14,6 +14,21 @@ def logmvnorm_vectorised(X,mu,cov):
     return -0.5 * Xdim * math.log(2. * math.pi) - 0.5 * np.log(mdla_dettrail2d(cov)) - 0.5 * xTPx_indivcov(X - mu,mdla_invtrail2d(cov))
     #return -0.5 * Xdim * math.log(2. * math.pi) - 0.5 * np.log(mdla_dettrail2d(cov)) - 0.5 * doublemdla_dottrail2x2_broadcast(X - mu,mdla_invtrail2d(cov))
 
+@numba.jit('f8[:,:](f8[:,:])',nopython=True) 
+def spsd_sqrtm_kernel(a): 
+    """
+    The 2d symmetric positive semi definite matrix square root
+    """
+    (vals,vecs)=np.linalg.eigh(a) 
+    return np.dot(np.dot(vecs,np.diag(np.sqrt(vals))),vecs.T) 
+
+@numba.jit(nopython=True)
+def spsd_sqrtm(a):
+    aa=a.reshape((-1,)+a.shape[-2:])
+    b=np.empty_like(aa,dtype=np.float64)
+    for i in range(aa.shape[0]):
+        b[...,i,:,:]=spsd_sqrtm_kernel(aa[...,i,:,:])
+    return b.reshape(a.shape)
 
 @numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
 def xTPx_staticcov(x,P):

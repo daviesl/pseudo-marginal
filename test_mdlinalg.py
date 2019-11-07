@@ -98,6 +98,25 @@ class TestMDLinAlg(unittest.TestCase):
         np.testing.assert_almost_equal([37.24800000000001, 47.142, 58.2, 70.42200000000001], r, decimal=13, err_msg='', verbose=True)
         #self.assertSequenceEqual(r.tolist(),[37.24800000000001, 47.142, 58.2, 70.42200000000001])
 
+    def test_spsd_sqrtm(self):
+        r = spsd_sqrtm(np.eye(4)*16+np.ones((4,4)))
+        tr= np.array([[4.11803399, 0.11803399, 0.11803399, 0.11803399],
+                   [0.11803399, 4.11803399, 0.11803399, 0.11803399],
+                   [0.11803399, 0.11803399, 4.11803399, 0.11803399],
+                   [0.11803399, 0.11803399, 0.11803399, 4.11803399]])
+        np.testing.assert_almost_equal(tr,r,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
+
+    def test_spsd_sqrtm(self):
+        trk= np.array([[4.11803399, 0.11803399, 0.11803399, 0.11803399],
+                   [0.11803399, 4.11803399, 0.11803399, 0.11803399],
+                   [0.11803399, 0.11803399, 4.11803399, 0.11803399],
+                   [0.11803399, 0.11803399, 0.11803399, 4.11803399]])
+        tr = np.zeros((10,4,4))
+        for i in range(10):
+            tr[i,...]=trk
+        r=spsd_sqrtm(np.broadcast_to(np.eye(4),(10,4,4))*16+np.ones((4,4)))
+        np.testing.assert_almost_equal(tr,r,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
+        
         
 
     #def test_someasserts(self):
