@@ -1,4 +1,5 @@
 import unittest
+import sys
 from mdlinalg import *
 
 class TestMDLinAlg(unittest.TestCase):
@@ -106,7 +107,16 @@ class TestMDLinAlg(unittest.TestCase):
                    [0.11803399, 0.11803399, 0.11803399, 4.11803399]])
         np.testing.assert_almost_equal(tr,r,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
 
-    def test_spsd_sqrtm(self):
+    def test_spsd_sqrtm_2(self):
+        A = np.random.rand(40,40)
+        B = np.dot(A,A.transpose())
+        r = spsd_sqrtm(B)
+        rr = np.dot(r,r.T)
+        #np.set_printoptions(threshold=sys.maxsize)
+        #print("r = {}".format(r))
+        np.testing.assert_almost_equal(rr,B,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
+
+    def test_spsd_sqrtm_vectorised(self):
         trk= np.array([[4.11803399, 0.11803399, 0.11803399, 0.11803399],
                    [0.11803399, 4.11803399, 0.11803399, 0.11803399],
                    [0.11803399, 0.11803399, 4.11803399, 0.11803399],

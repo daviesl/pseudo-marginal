@@ -11,23 +11,40 @@ import sys
 from lorenz63ssm import Lorenz63Abstract
 from lorenz96ssm import Lorenz96Abstract
 
-class Lorenz63(LindstromBridge,Lorenz63Abstract):
+#class Lorenz63(LindstromBridge,Lorenz63Abstract):
+#    pass
+#class Lorenz96(LindstromBridge,Lorenz96Abstract):
+#    pass
+class Lorenz96(Lorenz96Abstract):
     pass
-class Lorenz96(LindstromBridge,Lorenz96Abstract):
+class Lorenz63(Lorenz63Abstract):
     pass
 
-class ModelClass(Lorenz96):
-    pass
 
-synthetic_name = "Lorenz96_synthetic"
-
-theta0=ModelClass.default_theta()
 
 if __name__ == '__main__':
     timestr = time.strftime("%Y%m%d-%H%M%S")
 
     argctr = 1
     print(sys.argv)
+
+    modelflag = sys.argv[argctr]
+    argctr += 1
+    
+    if modelflag == 'Lorenz96':
+        class ModelClass(Lorenz96):
+            pass
+    elif modelflag == 'Kuramoto':
+        class ModelClass(Kuramoto):
+            pass
+    else: # Lorenz63
+        class ModelClass(Lorenz63):
+            pass
+
+    print("Model being used is {}".format(ModelClass.who()))
+    synthetic_name = "{}_synthetic".format(ModelClass.who())
+    theta0=ModelClass.default_theta()
+
     actionflag = sys.argv[argctr]
     argctr += 1
 
@@ -37,7 +54,7 @@ if __name__ == '__main__':
     #X0_mu = ModelClass.transformStatetoX(np.array([[0,1,1.05],[0,1,1.05]]))
 
     if actionflag == 't' or actionflag == 'r':
-        if (len(sys.argv) > 2):
+        if (len(sys.argv) > argctr):
             X = np.load(sys.argv[argctr])
             argctr += 1
             Y = np.load(sys.argv[argctr])
@@ -53,8 +70,8 @@ if __name__ == '__main__':
         X0_mu = ModelClass.transformStatetoX(X[np.newaxis,0,...])
         print("X0_mu = {}".format(X0_mu))
 
-        n=200 #2048 #1024 #8192 #1024 #16384 #2048 #512
-        chain_length=1000
+        n=2048 #1024 #8192 #1024 #16384 #2048 #512
+        chain_length=100
 
         pf = stateFilter(ModelClass(),Y,n)
 

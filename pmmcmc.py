@@ -15,6 +15,9 @@ class stateSpaceModel(object):
     defaults: One parameter, one state variable.
     """
     @classmethod
+    def who(cls):
+        return "stateSpaceModel"
+    @classmethod
     def X_size(cls):
         return 1
     @classmethod
@@ -63,6 +66,9 @@ class ItoProcess(stateSpaceModel):
     And then subsequent classes that inherit should be the process
         itself with drift, diffusion and loglikelihood defined.
     """
+    @classmethod
+    def who(cls):
+        return "ItoProcess"
     @classmethod
     def obserr(cls):
         return 1.0

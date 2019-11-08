@@ -12,10 +12,10 @@ import sys
 theta0 = np.array([10.,28.,2.667])
 #theta0 = np.array([10.,10,2.667])
 
-#class Lorenz63Abstract(ModifiedDiffusionBridge):
-#class Lorenz63Abstract(ResidualBridge):
-#class Lorenz63Abstract(LindstromBridge):
 class Lorenz63Abstract(ItoProcess):
+    @classmethod
+    def who(cls):
+        return "Lorenz63"
     @classmethod
     def default_theta(cls):
         global theta0
@@ -57,19 +57,14 @@ class Lorenz63Abstract(ItoProcess):
     def obsinterval(cls):
         return 40
     @classmethod
-    #@numba.jit
     def obserr(cls):
         return 0.1
     @classmethod
     def delta_t(cls):
         return 0.001
-    #@staticmethod
-    #@numba.jit("f8[:,:]()")
     @classmethod
     def observationCovariance(cls):
         return np.array([[cls.obserr()**2,0],[0,cls.obserr()**2]])
-    #@staticmethod
-    #@numba.jit("f8[:,:]()")
     @classmethod
     def obs_map(cls):
         return np.array([[1., 0.],
@@ -92,44 +87,53 @@ class Lorenz63Abstract(ItoProcess):
     @staticmethod
     @numba.jit("float64[:](float64[:])")
     def transformParameterstoTheta(nt):
-        #target = np.array([20.,40.,10.])
         global theta0
-        target = theta0 #np.array([10.,28.,2.667])
+        target = theta0 
         lower = target * 0.2
         upper = target + (target - lower)
         return (nt - lower)/(upper-lower)
     @staticmethod
-    @numba.jit #("float64[:][:](float64[:][:])")
+    @numba.jit 
     def transformXtoState(X):
         return np.column_stack((X[:,0]*20.0,X[:,1]*20.0,X[:,2]*5.+0.8))
     @staticmethod
-    @numba.jit #("float64[:][:](float64[:][:])")
+    @numba.jit 
     def transformStatetoX(tr):
         return np.column_stack((tr[:,0]/20.0,tr[:,1]/20.0,(tr[:,2]-0.8)/5.))
     @staticmethod
-    @numba.jit #("float64[:][:](float64[:][:],float64[:][:])")
-    def xTPx(x,P):
-        return np.sum(np.dot(x,P)*x,axis=1)
+    @numba.jit
+    def observationEquation(Xs): 
+        dim = Xs.shape[0]
+        Ys = np.zeros((dim,2))
+        Ys[:,0] = Xs[:,0] 
+        Ys[:,1] = Xs[:,2] 
+        return Ys
     @classmethod
-    def synthetic(cls,dt=0.001,num_steps=10000,x0=0.,y0=1.,z0=1.05,xW=1.,yW=1.,zW=1.,xO=1.,yO=1.,zO=1.):
+    def obseqn_with_noise(cls,Xs):
+        cov = cls.observationCovariance()
+        dim = cov.shape[0]
+        Ys = cls.observationEquation(Xs) + np.random.multivariate_normal(np.zeros(dim),cov,size=Xs.shape[0])
+        return Ys
+    @classmethod
+    def initialState(cls):
+        return np.array([0.,1.,1.05])
+    @classmethod
+    def synthetic(cls,dt=0.001,num_steps=10000,th0=theta0):
+        x0=cls.initialState()
         obsinterval = cls.obsinterval()
         # Need one more for the initial values
-        Xs = np.empty((num_steps + 1,3))
-        Ys = np.empty((num_steps + 1,2))
+        Xs = np.empty((num_steps + 1,cls.X_size()))
+        Ys = np.empty((num_steps + 1,cls.y_dim()))
         
         # Set initial values
-        Xs[0,0], Xs[0,1], Xs[0,2] = (x0,y0,z0)
+        Xs[0,:]=x0
         
         # Step through "time", calculating the partial derivatives at the current point
         # and using them to estimate the next point
         for i in range(num_steps):
-            #x_dot, y_dot, z_dot = lorenz(Xs[i,0], Xs[i,1], Xs[i,2])
-            X_dot = cls.drift(Xs[i,:])
-            Xs[i + 1,0] = Xs[i,0] + (X_dot[i,0] * dt)+ xW*np.random.normal(0,np.sqrt(dt)) 
-            Xs[i + 1,1] = Xs[i,1] + (X_dot[i,1] * dt)+ yW*np.random.normal(0,np.sqrt(dt))
-            Xs[i + 1,2] = Xs[i,2] + (X_dot[i,2] * dt)+ zW*np.random.normal(0,np.sqrt(dt))
-        Ys = obseqn_with_noise(Xs[::obsinterval])#,obserr_mat)
-        obserr_mat = cls.observationCovariance() #np.array([[obserr**2,0],[0,obserr**2]])
+            X_dot = cls.drift(Xs[i,:].reshape((1,cls.X_size())),0,th0).reshape((cls.X_size(),))
+            Xs[i + 1,:] = Xs[i,:] + (X_dot * dt)+ mdla_dottrail2x1_broadcast(spsd_sqrtm(cls.diffusion(Xs[i,:],0,th0)),np.random.normal(0,np.sqrt(dt),cls.X_size())) 
+        Ys = cls.obseqn_with_noise(Xs[::obsinterval])#,obserr_mat)
         return (Xs,Ys)
     @classmethod
     def plot_synthetic(cls,Xs,Ys,num_steps):
@@ -154,20 +158,6 @@ class Lorenz63Abstract(ItoProcess):
         ax2.set_zlabel("Z Axis")
         ax2.set_title("State")
         plt.show()
-    @staticmethod
-    @numba.jit
-    def observationEquation(Xs): #,sigma=np.array([obserr,obserr])):
-        dim = Xs.shape[0]
-        Ys = np.zeros((dim,2))
-        Ys[:,0] = Xs[:,0] #+ np.random.normal(0,np.sqrt(sigma[0]),dim)
-        Ys[:,1] = Xs[:,2] #+ np.random.normal(0,np.sqrt(sigma[1]),dim)
-        return Ys
-    @classmethod
-    def obseqn_with_noise(cls,Xs):#,cov=np.array([[obserr**2,0],[0,obserr**2]])):
-        cov = cls.observationCovariance()
-        dim = cov.shape[0]
-        Ys = cls.observationEquation(Xs) + np.random.multivariate_normal(np.zeros(dim),cov,size=Xs.shape[0])
-        return Ys
     @classmethod
     def plot_traces(cls,chain_length,estparams,ml):
         global theta0
