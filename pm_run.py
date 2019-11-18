@@ -10,6 +10,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 import sys
 from lorenz63ssm import Lorenz63Abstract
 from lorenz96ssm import Lorenz96Abstract
+from kuramotossm import KuramotoAbstract
 
 #class Lorenz63(LindstromBridge,Lorenz63Abstract):
 #    pass
@@ -19,6 +20,9 @@ class Lorenz96(Lorenz96Abstract):
     pass
 class Lorenz63(Lorenz63Abstract):
     pass
+class Kuramoto(KuramotoAbstract):
+    pass
+
 
 
 
@@ -28,13 +32,13 @@ if __name__ == '__main__':
     argctr = 1
     print(sys.argv)
 
-    modelflag = sys.argv[argctr]
+    modelflag = sys.argv[argctr].lower()
     argctr += 1
     
-    if modelflag == 'Lorenz96':
+    if modelflag == 'lorenz96':
         class ModelClass(Lorenz96):
             pass
-    elif modelflag == 'Kuramoto':
+    elif modelflag == 'kuramoto':
         class ModelClass(Kuramoto):
             pass
     else: # Lorenz63
@@ -43,7 +47,7 @@ if __name__ == '__main__':
 
     print("Model being used is {}".format(ModelClass.who()))
     synthetic_name = "{}_synthetic".format(ModelClass.who())
-    theta0=ModelClass.default_theta()
+    theta0=ModelClass.transformThetatoParameters(ModelClass.default_theta())
 
     actionflag = sys.argv[argctr]
     argctr += 1
@@ -69,11 +73,14 @@ if __name__ == '__main__':
 
         X0_mu = ModelClass.transformStatetoX(X[np.newaxis,0,...])
         print("X0_mu = {}".format(X0_mu))
+        print("Theta = {}".format(theta0))
 
-        n=2048 #1024 #8192 #1024 #16384 #2048 #512
+        n=8192 #2048 #1024 #8192 #1024 #16384 #2048 #512
         chain_length=100
 
-        pf = stateFilter(ModelClass(),Y,n)
+        #pf = stateFilter(ModelClass(),Y,n)
+        #pf = ESSPartiallyAdaptedParticleFilter(ModelClass(),Y,n)
+        pf = auxiliaryParticleFilter(ModelClass(),Y,n)
 
         # run pmmh
         #sampler = pmpfl(innov_lindstrom_bridge,innov_lindstrom_bridge,lh,Y,3,3,n)

@@ -701,7 +701,7 @@ class pmpfl(object):
 #        # ancestry trace the final target distrubution particles and sum the weights for each
     @classmethod
     def particlefilter(cls,yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
-        if True:
+        if False:
             return cls.bootstrapparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
         elif False:
             return cls.experimentalparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov)
@@ -711,7 +711,7 @@ class pmpfl(object):
             return cls.meanauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
         elif False:
             return cls.improvedauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
-        elif False:
+        elif True:
             return cls.essauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)
         elif False:
             return cls.fullessauxilliaryparticlefilter(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf)

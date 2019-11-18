@@ -116,6 +116,11 @@ class TestMDLinAlg(unittest.TestCase):
         #print("r = {}".format(r))
         np.testing.assert_almost_equal(rr,B,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
 
+    def test_spsd_sqrtm_3(self):
+        r = spsd_sqrtm(np.eye(4)*0.0001)
+        tr = np.eye(4)*0.01
+        np.testing.assert_almost_equal(tr,r,decimal=7,err_msg='Failed spsd_sqrtm()', verbose=True)
+
     def test_spsd_sqrtm_vectorised(self):
         trk= np.array([[4.11803399, 0.11803399, 0.11803399, 0.11803399],
                    [0.11803399, 4.11803399, 0.11803399, 0.11803399],

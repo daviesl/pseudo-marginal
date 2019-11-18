@@ -19,7 +19,7 @@ class Lorenz63Abstract(ItoProcess):
     @classmethod
     def default_theta(cls):
         global theta0
-        return theta0
+        return cls.transformParameterstoTheta(theta0)
     @classmethod
     def X_size(self):
         return 3
@@ -30,6 +30,11 @@ class Lorenz63Abstract(ItoProcess):
     def y_dim(cls):
         # TODO make this DRY with obs_map.ndim
         return 2
+    @staticmethod
+    @numba.jit
+    def diffusion(X_k,y_J,theta):
+        dim=X_k.shape[-1]
+        return np.eye(dim) * 0.01
     @staticmethod
     @numba.jit
     def drift(X_k,y_J,theta):
@@ -116,6 +121,7 @@ class Lorenz63Abstract(ItoProcess):
         return Ys
     @classmethod
     def initialState(cls):
+        #return np.array([-2.32,0.771,25.6])
         return np.array([0.,1.,1.05])
     @classmethod
     def synthetic(cls,dt=0.001,num_steps=10000,th0=theta0):
@@ -132,7 +138,10 @@ class Lorenz63Abstract(ItoProcess):
         # and using them to estimate the next point
         for i in range(num_steps):
             X_dot = cls.drift(Xs[i,:].reshape((1,cls.X_size())),0,th0).reshape((cls.X_size(),))
-            Xs[i + 1,:] = Xs[i,:] + (X_dot * dt)+ mdla_dottrail2x1_broadcast(spsd_sqrtm(cls.diffusion(Xs[i,:],0,th0)),np.random.normal(0,np.sqrt(dt),cls.X_size())) 
+            sigma = mdla_dottrail2x1_broadcast(spsd_sqrtm(cls.diffusion(Xs[i,:],0,th0)),np.random.normal(0,np.sqrt(dt),cls.X_size())) 
+            print("Sigma[{}] = {}".format(i,sigma))
+            Xs[i + 1,:] = Xs[i,:] + (X_dot * dt)+ sigma 
+            #Xs[i + 1,:] = Xs[i,:] + (X_dot * dt)+ mdla_dottrail2x1_broadcast(spsd_sqrtm(cls.diffusion(Xs[i,:],0,th0)),np.random.normal(0,np.sqrt(dt),cls.X_size())) 
         Ys = cls.obseqn_with_noise(Xs[::obsinterval])#,obserr_mat)
         return (Xs,Ys)
     @classmethod

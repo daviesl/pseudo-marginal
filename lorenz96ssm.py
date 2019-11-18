@@ -22,7 +22,7 @@ class Lorenz96Abstract(ItoProcess):
     @classmethod
     def default_theta(cls):
         global theta0
-        return theta0
+        return cls.transformParameterstoTheta(theta0)
     @classmethod
     def X_size(self):
         return 36
