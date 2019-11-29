@@ -29,26 +29,91 @@ class stateSpaceModel(object):
     @classmethod
     def initialState(cls):
         return np.ones(cls.X_size())
-    #def get_innov(self):
-    #    """
-    #    TODO: return a handle to the innov fn for numba JIT
-    #    """
-    #    return self.class_innov
-    #def innov(self,X_k,y_J,theta):
-    #    return self.class_innov(X_k,y_J,theta)
-    #@staticmethod
-    #@numba.jit
-    #def class_innov(X_k,y_J,theta):
-    #    """
-    #    Increment state X to next time point defined by 
-    #        observation interval
-    #    Computes stochastic terms.
-    #    """
-    #    _N_ = X_k.shape[0]
-    #    dim = X_k.shape[1]
-    #    dW_t = np.random.normal(0,1,(_N_,dim))
-    #    X_k1 = X_k + self.A(theta)*self.dt + self.B(theta)*math.sqrt(self.dt)
-    #    return X_k1, np.ones(_N_) # (next X, logpqratio)
+    @classmethod
+    def obserr(cls):
+        return 1.0
+    @classmethod
+    def observationCovariance(cls):
+        return np.eye(cls.y_dim()) * (cls.obserr() ** 2)
+    @staticmethod
+    @numba.jit
+    def drift(X_k,y_J,theta):
+        return np.ones(X_k.shape)
+    @staticmethod
+    @numba.jit
+    def diffusion(X_k,y_J,theta):
+        # TODO rename to volatility
+        dim=X_k.shape[-1]
+        return np.eye(dim)
+    @staticmethod
+    @numba.jit
+    def transformXtoState(X):
+        """
+        Override this method to transform the X variables defined on
+        [0,1] to the appropriate state variables for the problem
+        """
+        return X 
+    @staticmethod
+    @numba.jit
+    def transformStatetoX(state):
+        return state
+    @staticmethod
+    @numba.jit("float64[:](float64[:])")
+    def transformThetatoParameters(theta):
+        return theta
+    @staticmethod
+    @numba.jit("float64[:](float64[:])")
+    def transformParameterstoTheta(nt):
+        return nt
+    @classmethod
+    def generateInnovation(cls):
+        #a lambda function closure of the below eulermaruyama with drift and diffusion
+        # A quirk of Numba requires that every fn and variable in the
+        # below closure must not be part of an object, i.e. we need
+        # to be able to lazy evaluate it without the object/class present.
+        # The solution is to "pull out" every variable and fn below
+        # to the local scope. All functions that are numba.jit must be
+        # declared static.
+        drift = cls.drift
+        diffusion = cls.diffusion
+        X2tr = cls.transformXtoState
+        tr2X = cls.transformStatetoX
+        theta2tr = cls.transformThetatoParameters
+        tr2theta = cls.transformParameterstoTheta
+        @numba.jit
+        def EMInnovClosure(X_k,y_J,theta):
+            """
+            Returns Euler Maruyama innovation of the state variables
+                integrated over obsinterval timesteps of length delta_t.
+            """
+            next_state = X2tr(X_k)
+            trth = theta2tr(theta)
+            dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
+            next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2x1_broadcast(spsd_sqrtm(diffusion(next_state,y_J,trth)),dW_t)
+            return tr2X(next_state),np.zeros(X_k.shape[0]) 
+        return EMInnovClosure
+    @classmethod
+    def generateLogLikelihood(cls):
+        # As above with the innovation closure
+        # pull out things like observation error etc.
+        dim = cls.y_dim()
+        cov = cls.observationCovariance()
+        obseqn = cls.observationEquation
+        X2tr = cls.transformXtoState
+        tr2X = cls.transformStatetoX
+        @numba.jit
+        def loglhClosure(X,y,theta):
+            """
+            TODO: write support for state/time dependent obs cov
+            """
+            trX=X2tr(X)
+            y_star = obseqn(trX)
+            d = y_star-y
+            dd = xTPx(d,np.linalg.inv(cov))
+            log_lh_un = (-0.5*(dd)) 
+            norm_const = - (dim*0.5) * np.log(2*np.pi) - 0.5 * np.log(np.linalg.det(cov))
+            return log_lh_un + norm_const
+        return loglhClosure
 
 class ItoProcess(stateSpaceModel):
     """
@@ -70,40 +135,11 @@ class ItoProcess(stateSpaceModel):
     def who(cls):
         return "ItoProcess"
     @classmethod
-    def obserr(cls):
-        return 1.0
-    @classmethod
     def obsinterval(cls):
         return 40
     @classmethod
     def delta_t(cls):
         return 0.001
-    @classmethod
-    def observationCovariance(cls):
-        return np.eye(cls.y_dim()) * (cls.obserr ** 2)
-    @staticmethod
-    @numba.jit
-    def drift(X_k,y_J,theta):
-        return np.ones(X_k.shape)
-    @staticmethod
-    @numba.jit
-    def diffusion(X_k,y_J,theta):
-        # TODO rename to volatility
-        dim=X_k.shape[-1]
-        #return np.ones(X_k.shape+X_k.shape[-1:])*np.eye(dim)
-        return np.eye(dim)
-    @staticmethod
-    @numba.jit
-    def transformXtoState(X):
-        """
-        Override this method to transform the X variables defined on
-        [0,1] to the appropriate state variables for the problem
-        """
-        return X 
-    @staticmethod
-    @numba.jit
-    def transformStatetoX(state):
-        return state
     @classmethod
     def generateDeterministicDrift(cls):
         drift = cls.drift
@@ -155,28 +191,6 @@ class ItoProcess(stateSpaceModel):
                 next_state += drift(next_state,y_J,trth)*delta_t + mdla_dottrail2x1_broadcast(spsd_sqrtm(diffusion(next_state,y_J,trth)),dW_t)
             return tr2X(next_state),np.zeros(X_k.shape[0]) 
         return EMInnovClosure
-    @classmethod
-    def generateLogLikelihood(cls):
-        # As above with the innovation closure
-        # pull out things like observation error etc.
-        dim = cls.y_dim()
-        cov = cls.observationCovariance()
-        obseqn = cls.observationEquation
-        X2tr = cls.transformXtoState
-        tr2X = cls.transformStatetoX
-        @numba.jit
-        def loglhClosure(X,y,theta):
-            """
-            TODO: write support for state/time dependent obs cov
-            """
-            trX=X2tr(X)
-            y_star = obseqn(trX)
-            d = y_star-y
-            dd = xTPx(d,np.linalg.inv(cov))
-            log_lh_un = (-0.5*(dd)) 
-            norm_const = - (dim*0.5) * np.log(2*np.pi) - 0.5 * np.log(np.linalg.det(cov))
-            return log_lh_un + norm_const
-        return loglhClosure
             
 # Extend ItoProcess class for all bridge processes
 # Define the model class separately or extend ItoProcess.
@@ -195,7 +209,7 @@ class ModifiedDiffusionBridge(ItoProcess):
         obs_map = cls.obs_map()
         theta2tr = cls.transformThetatoParameters
         tr2theta = cls.transformParameterstoTheta
-        @numba.jit(nopython=True)
+        @numba.jit#(nopython=True)
         def MDBInnovClosure(X_k,y_J,theta):
             next_state = X2tr(X_k)
             trth = theta2tr(theta)
@@ -208,16 +222,33 @@ class ModifiedDiffusionBridge(ItoProcess):
                 dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
                 # MDB specific quantities
                 dk = (obsinterval - i) * delta_t
+                #print("dk = {}".format(dk))
+                #print("betaxx = {}".format(beta_xx))
+                #print("obserr_mat = {}".format(obserr_mat))
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
+                #print("P_k = {}".format(P_k))
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
-                psi_mdb = beta_all - C_P_k_C * delta_t
+                #print("C_P_k_C = {}".format(C_P_k_C))
+                b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
+                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                psi_mdb = beta_all - b_C_P_k_C_b * delta_t
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                mu_mdb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                #print("psi_mdb = {}".format(psi_mdb))
+                #print("psi_mdb - beta_all = {}".format(psi_mdb-beta_all))
+                #print("spsd_sqrtm(psi_mdb) = {}".format(spsd_sqrtm(psi_mdb)))
+                #print("mu_mdb = {}".format(mu_mdb))
                 x_mu_mdb = next_state + mu_mdb*delta_t
+                #print("x_mu_mdb = {}".format(x_mu_mdb))
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
+                #print("x_mu_em = {}".format(x_mu_em))
+                #print("dW_t = {}".format(dW_t))
                 next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
+                #print("next_state = {}".format(next_state))
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
+                #print("log_pq_ratio = {}".format(logpqratio))
             return tr2X(next_state), logpqratio
         return MDBInnovClosure
    
@@ -254,9 +285,13 @@ class LindstromBridge(ItoProcess):
                 # MDB specific quantities
                 P_k = mdla_invtrail2d(beta_xx*dk + C*(dk1**2) + obserr_mat) # updated precision matrix
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
-                psi_mdb = beta_all - C_P_k_C * delta_t
+                b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
+                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                psi_mdb = beta_all - b_C_P_k_C_b * delta_t
+                #psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_mdb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
+                mu_mdb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
                 x_mu_mdb = next_state + mu_mdb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
@@ -264,6 +299,61 @@ class LindstromBridge(ItoProcess):
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
             return tr2X(next_state), logpqratio
         return LindstromInnovClosure
+
+class LindstromResidualBridge(ItoProcess):
+    @classmethod
+    def generateInnovation(cls):
+        drift = cls.drift
+        diffusion = cls.diffusion
+        delta_t = cls.delta_t()
+        X2tr = cls.transformXtoState
+        tr2X = cls.transformStatetoX
+        obsinterval = cls.obsinterval()
+        obserr_mat = cls.observationCovariance()
+        obs_map = cls.obs_map()
+        theta2tr = cls.transformThetatoParameters
+        tr2theta = cls.transformParameterstoTheta
+        @numba.jit(nopython=True)
+        def LRBInnovClosure(X_k,y_J,theta):
+            next_state = X2tr(X_k)
+            trth = theta2tr(theta)
+            Xshape0 = X_k.shape[0]
+            Xshape1 = X_k.shape[1]
+            eta=np.zeros(X_k.shape+(obsinterval+1,))
+            logpqratio=np.zeros(Xshape0)
+            gamma = 0.5
+            last_eta = np.zeros_like(next_state)
+            last_eta[:] = next_state
+            for j in range(0,obsinterval+1):
+                eta[:,:,j] = last_eta + drift(last_eta,y_J,trth)*delta_t
+                last_eta[:] = eta[:,:,j]
+            for i in range(obsinterval): 
+                dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
+                dk = (obsinterval - i) * delta_t
+                dk1 = (obsinterval - (i+1)) * delta_t
+                r = next_state - eta[:,:,i] # eta[...,:]
+                chord = (eta[...,i+1]-eta[...,i])/delta_t
+                a_t = drift(next_state,y_J,trth) 
+                beta_all = diffusion(next_state,y_J,trth)
+                beta_xx = doublemdla_dottrail2x2_broadcast(obs_map.T,beta_all)
+                # Convex mixture
+                C = (gamma/delta_t) * beta_xx 
+                # MDB specific quantities using regularized Lindstrom drift
+                P_k = mdla_invtrail2d(beta_xx*dk + C*(dk1**2) + obserr_mat) # updated precision matrix
+                C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
+                b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
+                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                psi_mdb = beta_all - b_C_P_k_C_b * delta_t
+                # Compute LRB drift
+                mu_lrb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
+                x_mu_lrb = next_state + mu_lrb*delta_t
+                # Compute EM drift for comparison
+                x_mu_em = next_state + a_t*delta_t
+                next_state[:] = x_mu_lrb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
+                logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_lrb,psi_mdb*delta_t)
+            return tr2X(next_state), logpqratio
+        return LRBInnovClosure
 
 class ResidualBridge(ItoProcess):
     @classmethod
@@ -286,6 +376,7 @@ class ResidualBridge(ItoProcess):
             Xshape1 = X_k.shape[1]
             eta=np.zeros(X_k.shape+(obsinterval+1,))
             last_eta = np.zeros_like(next_state)
+            last_eta[:] = next_state
             logpqratio=np.zeros(Xshape0)
             gamma = 0.5
             for i in range(obsinterval+1):
@@ -302,9 +393,13 @@ class ResidualBridge(ItoProcess):
                 # MDB specific quantities
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
-                psi_mdb = beta_all - C_P_k_C * delta_t
+                b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
+                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
+                psi_mdb = beta_all - b_C_P_k_C_b * delta_t
+                #psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
-                mu_rb = a_t + mdla_dottrail2x1_broadcast(C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
+                mu_rb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
                 x_mu_rb = next_state + mu_rb*delta_t
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
@@ -326,7 +421,7 @@ class stateFilter(object):
         4) Theta = the parameters that are input into the ito process
     """
     def __init__(self,ssm,y_all,n):
-        T = y_all.shape[0]+1
+        T = y_all.shape[0]#+1
         self.y_all = y_all
         self.T = T
         self.n = n
@@ -344,14 +439,13 @@ class stateFilter(object):
         logml_chain=np.zeros((num_runs))
         for j in range(num_runs):
             self.X_all[0,:] = X0
+            i=0
+            #print("X_all[{},mean] = {}, y[{}]={}, |y-yhat|={}".format(i,i,self.ssm.transformXtoState(np.mean(self.X_all[i,:],axis=0)),self.y_all[i,:],(self.y_all[i,:]-self.ssm.observationEquation(self.ssm.transformXtoState(np.mean(self.X_all[i,:],axis=0))))**2))
             #print("X_all[0,:] = {}".format(self.X_all[0,:]))
             log_ml = np.zeros(self.T)
             for i in range(1,self.T):
-                log_ml[i] = self.filter_step(self.y_all[i-1,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov,self.propnf)
-                #print("X_all[{},:] = {}".format(i,self.X_all[i,:]))
-                #print("X_all[{},:] = {}, y={}".format(i,self.ssm.transformXtoState(self.X_all[i,:]),self.y_all[i-1,:]))
-                #print("y={}".format(self.y_all[i-1,:]))
-                #print("log_ml[{}] = {}".format(i,log_ml[i]))
+                log_ml[i] = self.filter_step(self.y_all[i,:],self.X_all[i,:],self.X_all[i-1,:],theta[:],self.X_ancestry[i,:],self.w_all[i-1,:],self.w_all[i,:],self.n,self.lh,self.innov,self.propnf)
+                #print("X_all[{},mean] = {}, y={}, |y-yhat|={}".format(i,self.ssm.transformXtoState(np.mean(self.X_all[i,:],axis=0)),self.y_all[i,:],(self.y_all[i,:]-self.ssm.observationEquation(self.ssm.transformXtoState(np.mean(self.X_all[i,:],axis=0))))**2))
             #print("X_all[{},:] = {}".format(self.T-1,self.X_all[self.T-1,:]))
             #print("log_ml[{}] = {}".format(1,log_ml[1]))
             #print("log_ml[{}] = {}".format(self.T-1,log_ml[self.T-1]))
@@ -386,7 +480,7 @@ class stateFilter(object):
             log_ml = np.zeros(T)
             for i in range(1,T):
                 # TODO add support for aux pf
-                log_ml[i] = fs(y_all[i-1,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+                log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
             # compute marginal likelihood of particle filter
             return log_ml.sum()
         return run_filter_for_params
@@ -405,6 +499,112 @@ class stateFilter(object):
         logsumexp_log_wi = logsumexp(log_wi)
         wi[:] = np.exp(log_wi - logsumexp_log_wi)
         return logsumexp_log_wi - np.log(n)
+
+class iteratedAuxiliaryParticleFilter(stateFilter):
+    def generateRunFilter(self):
+        # copy obj scope to local for closure
+        y_all = self.y_all
+        X_all = self.X_all
+        xsize = self.X_size()
+        X_ancestry = self.X_ancestry
+        w_all = self.w_all
+        T = self.T
+        n = self.n
+        lh = self.lh
+        innov = self.innov
+        propnf = self.propnf
+        fs = self.filter_step
+        @numba.jit
+        def run_iapf_for_params(theta):
+            psi_params_all = np.zeros((T,(xsize + xsize**2 + 1))) # mean and variance for each dimension of X, no off-diag terms in covariance. Last entry is log norm factor
+            psi_i_all = np.zeros((T+1,n))
+            def solve_psi_params(xi_i,psi_i):
+                #Xdim = xi_i.shape[1]
+                #a = np.zeros(xsize) # mean
+                #b = np.ones(xsize) # cov diag
+                # resample based on psi_i
+                lse_psi_i = logsumexp(np.log(psi_i))
+                psi_i_norm = np.exp(np.log(psi_i) - lse_psi_i)
+                indices = resample(psi_i_norm,n)
+                # compute mean and variance for x components
+                a = np.mean(xi_i[indices],axis=0)
+                b = np.cov(xi_i[indices],axis=0,rowvar=False)
+                return np.concatenate((a,b,[lse_psi_i]))
+            def psi(X,params):
+                """
+                multivariate gaussian mean a with diagonal covariance terms in vector b. No off-diag terms.
+                """
+                a = params[:xsize]
+                b = params[xsize:xsize**2].reshape((xsize,xsize)) #**2 if std dev
+                binv = np.linalg.inv(cov)
+                lse = params[-1]
+                #Xdim = a.shape[0]
+                return -0.5 *xsize* math.log(2. * math.pi) - 0.5 * math.log(np.sum(b)) - 0.5 * np.sum(np.dot(X-a,binv)*(X-a),axis=1) + lse
+             
+            K = 10
+            l = 0
+            tau_stop = math.log(0.5)
+            n_l = np.ones(K) * n
+            llh_all = np.zeros(T)
+            log_ml_all = np.zeros(K)
+            done = False
+            mincomplete = False
+            while not done:
+                log_ml = np.zeros(T)
+                for i in range(1,T):
+                    log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+                # compute marginal likelihood of particle filter
+                log_ml_all[l] = log_ml.sum()
+                if l == K - 1:
+                    mincomplete = True
+                # now check if we are converging
+                log_Z_mean = logsumexp(log_ml_all) - math.log(K)
+                log_Z_sd = 0.5*(logsumexp(2*np.log(np.exp(log_ml_all - log_Z_mean) - 1))-math.log(K-1))
+                if log_Z_sd - log_Z_mean < tau_stop:
+                    done = True
+                else:
+                    psi_i_all[-1,:] = 1
+                    psi_params_all[-1,:] = solve_psi_params(X_all[i,:],psi_i_all[i+1,:])
+                    for i in reversed(range(2,T)):
+                        # fit psi_t
+                        psi_params_all[i,:] = solve_psi_params(X_all[i,:],psi_i_all[i+1,:])
+                        # compute transition f(x_t,x_{t+1) deterministic
+                        # in the iAPF this is the integral against psi_{t+1}
+                        Xi_bar, lpqr = propnf(X_all[i-1,:],y_all[i-1,:],theta)
+                        log_psi_nf = psi(Xi_bar,psi_params_all[i,:]) # TODO for the APF inner filter, we could store the propnf and only perform once!
+                        loglh_Xi_1 = lh(X_all[i-1,:],y_all[i-2],theta)
+                        log_psi_i = loglh_Xi_1 + log_psi_nf
+                        # TODO here is where we would put ESS tempering for psi_nf
+                        # maybe an extra psi param for the ESS, set after fit.
+                        psi_i_all[i,:] = np.exp(log_psi_i)
+                        #
+                    l = (l + 1) % K
+            log_ml = np.zeros(T)
+            for i in range(1,T):
+                log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+            # compute marginal likelihood of particle filter
+            return log_ml.sum()
+            # 
+        return run_iapf_for_params
+    @staticmethod
+    @numba.jit
+    def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+        # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
+        # Compute the posterior integral p(y_t | x_{t-1})
+        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        loglh_nf = lh(Xi_bar,yi,theta) 
+        log_v_1=np.log(wi_1) + loglh_nf + lpqr
+        v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        Xi_1_j=Xi_1[Xianc,:]
+        wi_1_j=wi_1[Xianc]
+        log_v_1_j=log_v_1[Xianc]
+        log_v_1n_j=np.log(v_1_norm[Xianc])
+        Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
+        loglh=lh(Xi,yi,theta)
+        log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
+        wi[:]=np.exp(log_wi-logsumexp(log_wi))
+        return logsumexp(log_wi) + logsumexp(log_v_1) - np.log(n)
 
 # The rest of the filters
 class auxiliaryParticleFilter(stateFilter):

@@ -12,20 +12,6 @@ from lorenz63ssm import Lorenz63Abstract
 from lorenz96ssm import Lorenz96Abstract
 from kuramotossm import KuramotoAbstract
 
-#class Lorenz63(LindstromBridge,Lorenz63Abstract):
-#    pass
-#class Lorenz96(LindstromBridge,Lorenz96Abstract):
-#    pass
-class Lorenz96(Lorenz96Abstract):
-    pass
-class Lorenz63(Lorenz63Abstract):
-    pass
-class Kuramoto(KuramotoAbstract):
-    pass
-
-
-
-
 if __name__ == '__main__':
     timestr = time.strftime("%Y%m%d-%H%M%S")
 
@@ -34,25 +20,55 @@ if __name__ == '__main__':
 
     modelflag = sys.argv[argctr].lower()
     argctr += 1
+
+    bridgeflag = sys.argv[argctr].lower()
+    argctr += 1
+
+    pfflag = sys.argv[argctr].lower()
+    argctr += 1
     
     if modelflag == 'lorenz96':
-        class ModelClass(Lorenz96):
+        class AbstractModelClass(Lorenz96Abstract):
             pass
     elif modelflag == 'kuramoto':
-        class ModelClass(Kuramoto):
+        class AbstractModelClass(KuramotoAbstract):
             pass
     else: # Lorenz63
-        class ModelClass(Lorenz63):
+        class AbstractModelClass(Lorenz63Abstract):
+            pass
+
+    if bridgeflag == 'mdb':
+        print("Using the Modified Diffusion Bridge")
+        class ModelClass(ModifiedDiffusionBridge,AbstractModelClass):
+            pass
+    elif bridgeflag == 'res':
+        print("Using the Residual Bridge")
+        class ModelClass(ResidualBridge,AbstractModelClass):
+            pass
+    elif bridgeflag == 'lin':
+        print("Using the Lindstrom Bridge")
+        class ModelClass(LindstromBridge,AbstractModelClass):
+            pass
+    elif bridgeflag == 'reslin':
+        print("Using the Residual Lindstrom Bridge")
+        class ModelClass(LindstromResidualBridge,AbstractModelClass):
+            pass
+    else: # none
+        print("Using Myopic Euler Maruyama")
+        class ModelClass(AbstractModelClass):
             pass
 
     print("Model being used is {}".format(ModelClass.who()))
-    synthetic_name = "{}_synthetic".format(ModelClass.who())
+    synthetic_name = "{}_{}_synthetic".format(ModelClass.who(),bridgeflag)
     theta0=ModelClass.transformThetatoParameters(ModelClass.default_theta())
+
+    nflag = int(sys.argv[argctr])
+    argctr += 1
 
     actionflag = sys.argv[argctr]
     argctr += 1
 
-    num_steps = 6400 #3200 #12800 #12800 #3200 #12800 # 1600
+    num_steps = 1200 #12800 #1600 #6400 #3200 #12800 #12800 #3200 #12800 # 1600
     #X0_ = ModelClass.initialState() #np.array([0,1,1.05])
     #X0_ = X0_[np.newaxis,:]
     #X0_mu = ModelClass.transformStatetoX(np.array([[0,1,1.05],[0,1,1.05]]))
@@ -75,25 +91,17 @@ if __name__ == '__main__':
         print("X0_mu = {}".format(X0_mu))
         print("Theta = {}".format(theta0))
 
-        n=8192 #2048 #1024 #8192 #1024 #16384 #2048 #512
-        chain_length=100
+        n=nflag #16384 #1024 #8192 #1024 #16384 #2048 #512
+        chain_length=200
 
-        #pf = stateFilter(ModelClass(),Y,n)
-        #pf = ESSPartiallyAdaptedParticleFilter(ModelClass(),Y,n)
-        pf = auxiliaryParticleFilter(ModelClass(),Y,n)
+        if pfflag=='apf':
+            pf = auxiliaryParticleFilter(ModelClass(),Y,n)
+        elif pfflag=='essapf':
+            pf = ESSPartiallyAdaptedParticleFilter(ModelClass(),Y,n)
+        else: # bootstrap
+            pf = stateFilter(ModelClass(),Y,n)
 
         # run pmmh
-        #sampler = pmpfl(innov_lindstrom_bridge,innov_lindstrom_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,innov_lindstrom_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_lindstrom_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_diffusion_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_lindstrom_bridge,propagate_noisefree,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_lindstrom_residual_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,propagate_noisefree,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,locally_opt_proposal_lindstrom_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov_residual_bridge,innov,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,innov_lindstrom_residual_bridge,lh,Y,3,3,n)
-        #sampler = pmpfl(innov,innov,lh,Y,3,3,n)
         sampler = parameterEstimator(pf)
 
     if actionflag == 't':
@@ -128,12 +136,14 @@ if __name__ == '__main__':
         ml_test_log_var = 2. * ml_test_log_mean + np.log(np.sum((np.exp(ml_test-ml_test_log_mean)-1)**2)) - math.log(chain_length)
         
         
+        print("Synthetic is {}".format(synthetic_name))
         print("Log Marginal likelihood: Mean = {} Std Dev = {}".format(ml_test.mean(),ml_test.std()))
         print("Log Non-log: Mean = {} Std Dev = {}".format(ml_test_log_mean,ml_test_log_var * 0.5))
     
         fig,(ax1,ax2) = plt.subplots(1,2)
         ax1.plot(ml_test,'y',linewidth=1)
         ax2.boxplot(ml_test)
+        fig.suptitle("{} {}".format(r"$ln(Var[p(y|\theta)])$)",synthetic_name), fontsize=16)
         plt.show()
 
     elif actionflag == 'r':

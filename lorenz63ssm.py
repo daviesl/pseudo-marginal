@@ -63,7 +63,8 @@ class Lorenz63Abstract(ItoProcess):
         return 40
     @classmethod
     def obserr(cls):
-        return 0.1
+        #return 0.1
+        return 0.49
     @classmethod
     def delta_t(cls):
         return 0.001
@@ -100,11 +101,11 @@ class Lorenz63Abstract(ItoProcess):
     @staticmethod
     @numba.jit 
     def transformXtoState(X):
-        return np.column_stack((X[:,0]*20.0,X[:,1]*20.0,X[:,2]*5.+0.8))
+        return np.column_stack((X[...,0]*20.0,X[...,1]*20.0,X[...,2]*5.+0.8))
     @staticmethod
     @numba.jit 
     def transformStatetoX(tr):
-        return np.column_stack((tr[:,0]/20.0,tr[:,1]/20.0,(tr[:,2]-0.8)/5.))
+        return np.column_stack((tr[...,0]/20.0,tr[...,1]/20.0,(tr[...,2]-0.8)/5.))
     @staticmethod
     @numba.jit
     def observationEquation(Xs): 
@@ -121,8 +122,8 @@ class Lorenz63Abstract(ItoProcess):
         return Ys
     @classmethod
     def initialState(cls):
-        #return np.array([-2.32,0.771,25.6])
-        return np.array([0.,1.,1.05])
+        return np.array([-2.32,0.771,25.6])
+        #return np.array([0.,1.,1.05])
     @classmethod
     def synthetic(cls,dt=0.001,num_steps=10000,th0=theta0):
         x0=cls.initialState()
