@@ -222,33 +222,18 @@ class ModifiedDiffusionBridge(ItoProcess):
                 dW_t = np.random.normal(0,np.sqrt(delta_t),X_k.shape)
                 # MDB specific quantities
                 dk = (obsinterval - i) * delta_t
-                #print("dk = {}".format(dk))
-                #print("betaxx = {}".format(beta_xx))
-                #print("obserr_mat = {}".format(obserr_mat))
                 P_k = mdla_invtrail2d(beta_xx*dk + obserr_mat) # updated precision matrix
-                #print("P_k = {}".format(P_k))
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
-                #print("C_P_k_C = {}".format(C_P_k_C))
                 b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
-                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 psi_mdb = beta_all - b_C_P_k_C_b * delta_t
                 # Compute MDB drift
                 mu_mdb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
-                #print("psi_mdb = {}".format(psi_mdb))
-                #print("psi_mdb - beta_all = {}".format(psi_mdb-beta_all))
-                #print("spsd_sqrtm(psi_mdb) = {}".format(spsd_sqrtm(psi_mdb)))
-                #print("mu_mdb = {}".format(mu_mdb))
                 x_mu_mdb = next_state + mu_mdb*delta_t
-                #print("x_mu_mdb = {}".format(x_mu_mdb))
                 # Compute EM drift for comparison
                 x_mu_em = next_state + a_t*delta_t
-                #print("x_mu_em = {}".format(x_mu_em))
-                #print("dW_t = {}".format(dW_t))
                 next_state[:] = x_mu_mdb + mdla_dottrail2x1_broadcast(spsd_sqrtm(psi_mdb),dW_t)
-                #print("next_state = {}".format(next_state))
                 logpqratio[:] += logmvnorm_vectorised(next_state,x_mu_em,beta_all*delta_t) - logmvnorm_vectorised(next_state,x_mu_mdb,psi_mdb*delta_t)
-                #print("log_pq_ratio = {}".format(logpqratio))
             return tr2X(next_state), logpqratio
         return MDBInnovClosure
    
@@ -287,9 +272,7 @@ class LindstromBridge(ItoProcess):
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
-                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 psi_mdb = beta_all - b_C_P_k_C_b * delta_t
-                #psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
                 mu_mdb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,(y_J - mdla_dottrail2x1_broadcast(obs_map.T,(next_state + a_t*dk)))))
                 x_mu_mdb = next_state + mu_mdb*delta_t
@@ -343,7 +326,6 @@ class LindstromResidualBridge(ItoProcess):
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
-                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 psi_mdb = beta_all - b_C_P_k_C_b * delta_t
                 # Compute LRB drift
                 mu_lrb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
@@ -395,9 +377,7 @@ class ResidualBridge(ItoProcess):
                 C_P_k_C = doublemdla_dottrail2x2_broadcast(obs_map,P_k)
                 b_C_P_k_C = mdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 b_C_P_k_C_b = mdla_dottrail2x2_broadcast(b_C_P_k_C,beta_all.T)
-                #b_C_P_k_C_b = doublemdla_dottrail2x2_broadcast(beta_all,C_P_k_C)
                 psi_mdb = beta_all - b_C_P_k_C_b * delta_t
-                #psi_mdb = beta_all - C_P_k_C * delta_t
                 # Compute MDB drift
                 mu_rb = a_t + mdla_dottrail2x1_broadcast(b_C_P_k_C, mdla_dottrail2x1_broadcast(obs_map,( y_J - mdla_dottrail2x1_broadcast(obs_map.T,eta[...,obsinterval-1] + r + (a_t-chord)*dk))))
                 x_mu_rb = next_state + mu_rb*delta_t
@@ -501,6 +481,19 @@ class stateFilter(object):
         return logsumexp_log_wi - np.log(n)
 
 class iteratedAuxiliaryParticleFilter(stateFilter):
+    @staticmethod
+    @numba.jit
+    def psi(X,params):
+        """
+        multivariate gaussian mean a with diagonal covariance terms in vector b. No off-diag terms.
+        """
+        a = params[:xsize]
+        b = params[xsize:xsize+xsize**2].reshape((xsize,xsize)) #**2 if std dev
+        binv = np.linalg.inv(cov)
+        lse = params[-2]
+        alpha = params[-1]
+        #Xdim = a.shape[0]
+        return alpha * (-0.5 *xsize* math.log(2. * math.pi) - 0.5 * math.log(np.sum(b)) - 0.5 * np.sum(np.dot(X-a,binv)*(X-a),axis=1) + lse)
     def generateRunFilter(self):
         # copy obj scope to local for closure
         y_all = self.y_all
@@ -514,9 +507,12 @@ class iteratedAuxiliaryParticleFilter(stateFilter):
         innov = self.innov
         propnf = self.propnf
         fs = self.filter_step
+        psi = self.psi # we need the function
         @numba.jit
         def run_iapf_for_params(theta):
-            psi_params_all = np.zeros((T,(xsize + xsize**2 + 1))) # mean and variance for each dimension of X, no off-diag terms in covariance. Last entry is log norm factor
+            psi_params_all = np.zeros((T,(xsize + xsize**2 + 2))) # mean and variance for each dimension of X, no off-diag terms in covariance. Second last entry is log norm factor, last is the tempering factor between [0,1]
+            psi_params_all[:,xsize:xsize+xsize**2] = np.eye(xsize).ravel() # set covariance to unity to avoid breaking mvn calculation
+            psi_params_all[:,-1] = 0 # set tempering to 0 initially
             psi_i_all = np.zeros((T+1,n))
             def solve_psi_params(xi_i,psi_i):
                 #Xdim = xi_i.shape[1]
@@ -529,17 +525,7 @@ class iteratedAuxiliaryParticleFilter(stateFilter):
                 # compute mean and variance for x components
                 a = np.mean(xi_i[indices],axis=0)
                 b = np.cov(xi_i[indices],axis=0,rowvar=False)
-                return np.concatenate((a,b,[lse_psi_i]))
-            def psi(X,params):
-                """
-                multivariate gaussian mean a with diagonal covariance terms in vector b. No off-diag terms.
-                """
-                a = params[:xsize]
-                b = params[xsize:xsize**2].reshape((xsize,xsize)) #**2 if std dev
-                binv = np.linalg.inv(cov)
-                lse = params[-1]
-                #Xdim = a.shape[0]
-                return -0.5 *xsize* math.log(2. * math.pi) - 0.5 * math.log(np.sum(b)) - 0.5 * np.sum(np.dot(X-a,binv)*(X-a),axis=1) + lse
+                return np.concatenate((a,b,[lse_psi_i,1])) # set tempering alpha to 1. Reset later
              
             K = 10
             l = 0
@@ -551,55 +537,69 @@ class iteratedAuxiliaryParticleFilter(stateFilter):
             mincomplete = False
             while not done:
                 log_ml = np.zeros(T)
+                # run the psi-apf particle filter
                 for i in range(1,T):
-                    log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+                    log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf,psi_params_all[i,:])
                 # compute marginal likelihood of particle filter
                 log_ml_all[l] = log_ml.sum()
                 if l == K - 1:
                     mincomplete = True
-                # now check if we are converging
-                log_Z_mean = logsumexp(log_ml_all) - math.log(K)
-                log_Z_sd = 0.5*(logsumexp(2*np.log(np.exp(log_ml_all - log_Z_mean) - 1))-math.log(K-1))
-                if log_Z_sd - log_Z_mean < tau_stop:
-                    done = True
-                else:
-                    psi_i_all[-1,:] = 1
-                    psi_params_all[-1,:] = solve_psi_params(X_all[i,:],psi_i_all[i+1,:])
-                    for i in reversed(range(2,T)):
-                        # fit psi_t
-                        psi_params_all[i,:] = solve_psi_params(X_all[i,:],psi_i_all[i+1,:])
-                        # compute transition f(x_t,x_{t+1) deterministic
+                if mincomplete:
+                    # now check if we are converging
+                    log_Z_mean = logsumexp(log_ml_all) - math.log(K)
+                    log_Z_sd = 0.5*(logsumexp(2*np.log(np.exp(log_ml_all - log_Z_mean) - 1))-math.log(K-1))
+                    if log_Z_sd - log_Z_mean < tau_stop:
+                        done = True
+                if not done:
+                    #psi_i_all[-1,:] = 1
+                    #psi_params_all[-1,:] = solve_psi_params(X_all[T-1,:],psi_i_all[T,:]) # Don't solve for it, just set tempering to zero
+                    #psi_params_all[-1,xsize:xsize+xsize**2] = np.eye(xsize).ravel() # set covariance to unity to avoid breaking mvn calculation
+                    #psi_params_all[-1,-1] = 0 # set tempering to 0 initially
+                    loglh_Xi_1 = lh(X_all[T-1,:],y_all[T-1],theta)
+                    psi_i_all[T,:] = np.exp(loglh_Xi_1) # time T-1, and the log_psi_nf @ T-1 is zero
+                    # fit psi_t
+                    psi_params_all[T-1,:] = solve_psi_params(X_all[T-1,:],psi_i_all[T,:])
+                    for i in reversed(range(1,T)):
+                        # compute transition f(x_t,x_{t+1}) deterministic
                         # in the iAPF this is the integral against psi_{t+1}
-                        Xi_bar, lpqr = propnf(X_all[i-1,:],y_all[i-1,:],theta)
+                        Xi_bar, lpqr = propnf(X_all[i-1,:],y_all[i,:],theta)
                         log_psi_nf = psi(Xi_bar,psi_params_all[i,:]) # TODO for the APF inner filter, we could store the propnf and only perform once!
-                        loglh_Xi_1 = lh(X_all[i-1,:],y_all[i-2],theta)
+                        loglh_Xi_1 = lh(X_all[i-1,:],y_all[i-1],theta) 
                         log_psi_i = loglh_Xi_1 + log_psi_nf
                         # TODO here is where we would put ESS tempering for psi_nf
                         # maybe an extra psi param for the ESS, set after fit.
+                        # OR third idea, we set alpha after we've fit psi_t and used it to compute the next psi_{t-1}^i. Retrospective tempering. I think this is most likely
+                        # would look like psi_params_all[i,-1] = alpha
                         psi_i_all[i,:] = np.exp(log_psi_i)
-                        #
+                        # fit psi_t
+                        psi_params_all[i-1,:] = solve_psi_params(X_all[i-1,:],psi_i_all[i,:]) # maybe I should put the tempering in the solve method. Would require splitting the psi_i variable up into likelihood at X[i-1] and the psi_nf values
+                        # below we would set the tempering term from the ESS tempering above
+                        # psi_params_all[i-1,-1] = alpha
                     l = (l + 1) % K
+            # Do last run (step 3 in algorithm from paper) to remove bias
             log_ml = np.zeros(T)
             for i in range(1,T):
-                log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf)
+                log_ml[i] = fs(y_all[i,:],X_all[i,:],X_all[i-1,:],theta,X_ancestry[i,:],w_all[i-1,:],w_all[i,:],n,lh,innov,propnf,psi_params_all[i,:])
             # compute marginal likelihood of particle filter
             return log_ml.sum()
             # 
         return run_iapf_for_params
     @staticmethod
     @numba.jit
-    def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf):
+    def filter_step(yi,Xi,Xi_1,theta,Xianc,wi_1,wi,n,lh,innov,propnf,psi_params_i):
         # Note the way Xianc ancestry are stored, it is on the parent state Xi_1
         # Compute the posterior integral p(y_t | x_{t-1})
-        Xi_bar, lpqr = propnf(Xi_1,yi,theta)
-        loglh_nf = lh(Xi_bar,yi,theta) 
-        log_v_1=np.log(wi_1) + loglh_nf + lpqr
-        v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
-        Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        #Xi_bar, lpqr = propnf(Xi_1,yi,theta)
+        #loglh_nf = lh(Xi_bar,yi,theta) 
+        #log_v_1=np.log(wi_1) + loglh_nf + lpqr
+        #v_1_norm=np.exp(log_v_1-logsumexp(log_v_1))
+        #Xianc[:]=resample(v_1_norm,n) # j_i, the new jth parent for the ith particle , should be Xianc_1
+        # TODO remove the APF stuff here, return to BPF, then figure out a way to transform the random number generators used for the innov draw.
+        Xianc[:]=resample(wi_1,n)
         Xi_1_j=Xi_1[Xianc,:]
         wi_1_j=wi_1[Xianc]
-        log_v_1_j=log_v_1[Xianc]
-        log_v_1n_j=np.log(v_1_norm[Xianc])
+        #log_v_1_j=log_v_1[Xianc]
+        #log_v_1n_j=np.log(v_1_norm[Xianc])
         Xi[:],logpqratio=innov(Xi_1_j,yi,theta)
         loglh=lh(Xi,yi,theta)
         log_wi=loglh+logpqratio+np.log(wi_1_j)-log_v_1_j
